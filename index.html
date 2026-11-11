@@ -164,11 +164,18 @@
       <p class="note" id="debug-note">Words and numbers are masked locally. Review before sharing.</p>
       <label for="debug-source" id="debug-label">Paste text to diagnose</label>
       <textarea id="debug-source" spellcheck="false" placeholder="Paste text here"></textarea>
-      <div class="exports"><button type="button" id="debug-generate">Generate sanitized report</button></div>
+      <div class="exports">
+        <button type="button" id="debug-generate">Generate sanitized report</button>
+        <button type="button" id="debug-ocr-show" disabled>View sanitized OCR text</button>
+      </div>
+      <p id="debug-ocr-hint" class="note">Run image or scanned-PDF OCR first.</p>
       <section id="debug-output" hidden>
         <label for="debug-report" id="debug-output-label">Sanitized report (review before copying)</label>
         <textarea id="debug-report" readonly spellcheck="false"></textarea>
-        <div class="exports"><button type="button" id="debug-copy">Copy sanitized report</button></div>
+        <div class="exports">
+          <button type="button" id="debug-copy">Copy sanitized report</button>
+          <button type="button" id="debug-ocr-copy" hidden>Copy all sanitized OCR text</button>
+        </div>
       </section>
       <p id="debug-status" role="status" aria-live="polite"></p>
     </section>
@@ -228,6 +235,9 @@
       debugLabel: document.getElementById('debug-label'),
       debugSource: document.getElementById('debug-source'),
       debugGenerate: document.getElementById('debug-generate'),
+      debugOcrShow: document.getElementById('debug-ocr-show'),
+      debugOcrCopy: document.getElementById('debug-ocr-copy'),
+      debugOcrHint: document.getElementById('debug-ocr-hint'),
       debugOutput: document.getElementById('debug-output'),
       debugOutputLabel: document.getElementById('debug-output-label'),
       debugReport: document.getElementById('debug-report'),
@@ -291,6 +301,10 @@
         debugLabel: 'Paste text to diagnose',
         debugPlaceholder: 'Paste text here',
         debugGenerate: 'Generate sanitized report',
+        debugOcrShow: 'View sanitized OCR text',
+        debugOcrCopy: 'Copy all sanitized OCR text',
+        debugOcrHint: 'Run image or scanned-PDF OCR first.',
+        debugOcrOutputLabel: 'All masked OCR lines (review before copying)',
         debugOutputLabel: 'Sanitized report (review before copying)',
         debugCopy: 'Copy sanitized report',
         debugEmpty: 'Paste text first.',
@@ -353,6 +367,10 @@
         debugLabel: 'Liitä tutkittava teksti',
         debugPlaceholder: 'Liitä teksti tähän',
         debugGenerate: 'Luo anonymisoitu raportti',
+        debugOcrShow: 'Näytä peitetty OCR-teksti',
+        debugOcrCopy: 'Kopioi kaikki peitetty OCR-teksti',
+        debugOcrHint: 'Tunnista ensin kuva tai skannattu PDF.',
+        debugOcrOutputLabel: 'Kaikki peitetyt OCR-rivit (tarkista ennen kopiointia)',
         debugOutputLabel: 'Anonymisoitu raportti (tarkista ennen kopiointia)',
         debugCopy: 'Kopioi anonymisoitu raportti',
         debugEmpty: 'Liitä ensin tekstiä.',
@@ -369,6 +387,7 @@
     let documentProcessing = false;
     let diagnostics = null;
     let diagnosticsFeedback = '';
+    let latestOcrDebugReport = '';
     let sourceNames = [];
     let lastRenderedRows = [];
     let lastNameFirst = false;
@@ -613,7 +632,10 @@
       ui.debugLabel.textContent = translate('debugLabel');
       ui.debugSource.placeholder = translate('debugPlaceholder');
       ui.debugGenerate.textContent = translate('debugGenerate');
-      ui.debugOutputLabel.textContent = translate('debugOutputLabel');
+      ui.debugOcrShow.textContent = translate('debugOcrShow');
+      ui.debugOcrCopy.textContent = translate('debugOcrCopy');
+      ui.debugOcrHint.textContent = translate('debugOcrHint');
+      ui.debugOutputLabel.textContent = translate(ui.debugOcrCopy.hidden ? 'debugOutputLabel' : 'debugOcrOutputLabel');
       ui.debugCopy.textContent = translate('debugCopy');
       ui.diagnosticsCopy.textContent = translate('diagnosticsCopy');
       ui.diagnosticsNote.textContent = translate('diagnosticsNote');
@@ -961,6 +983,51 @@
       }).join('');
     }
 
+
+    // OCR words may include names the detector misses: mask EVERY word and
+    // number, not merely those classified as personal names.
+    function sanitizeOcrBlock(rawText, itemNumber) {
+      const lines = String(rawText || '').replace(/\r\n?/g, '\n').split('\n');
+      return {
+        item: itemNumber,
+        line_count: lines.length,
+        lines: lines.map((raw, i) => {
+          let pasteCount = null;
+          let pdfCount = null;
+          try { pasteCount = cleanPastedNames(raw).length; } catch (_) {}
+          try { pdfCount = extractFromLine(raw).length; } catch (_) {}
+          return { line: i + 1, sanitized_text: textShape(raw),
+            paste_detected: pasteCount, pdf_line_detected: pdfCount };
+        })
+      };
+    }
+    function publishSanitizedOcrReport(source, blocks) {
+      if (!blocks.length) return;
+      // Blocks contain only masked shapes and fixed/numeric fields.
+      latestOcrDebugReport = JSON.stringify({
+        report_version: 1, app: 'Nimilista',
+        kind: 'sanitized_ocr_full_text',
+        source: source === 'pdf_ocr' ? 'pdf_ocr' : 'image_ocr',
+        note: 'All words and numbers masked. Review patterns before sharing.',
+        total_lines: blocks.reduce((sum, block) => sum + block.line_count, 0),
+        items: blocks
+      }, null, 2);
+      ui.debugOcrShow.disabled = false;
+      ui.debugOcrHint.hidden = true;
+    }
+    function clearSanitizedOcrReport() {
+      latestOcrDebugReport = '';
+      ui.debugOcrShow.disabled = true;
+      ui.debugOcrHint.hidden = false;
+      if (!ui.debugOcrCopy.hidden) {
+        ui.debugOutput.hidden = true;
+        ui.debugReport.value = '';
+        ui.debugOcrCopy.hidden = true;
+        ui.debugCopy.hidden = false;
+        ui.debugStatus.textContent = '';
+      }
+    }
+
     function makeSanitizedDebugReport(source) {
       const lines = source.normalize('NFC').replace(/\r\n?/g, '\n').split('\n');
       const layout = { empty: 0, tabbed: 0, semicolon: 0, comma: 0, multiple_spaces: 0 };
@@ -1015,6 +1082,7 @@
       }).promise;
       diagnostics.pdf_page_count = pdf.numPages;
       const lines = [];
+      const scannedBlocks = [];
       try {
         for (let number = 1; number <= pdf.numPages; number++) {
           if (runId !== activeRun) return [];
@@ -1040,6 +1108,8 @@
               setStatus('ocr', number, pdf.numPages);
               pageLines = await readScannedPage(page);
               pageDiagnostic.ocr_lines = pageLines.length;
+              scannedBlocks.push(sanitizeOcrBlock(pageLines.join('\n'), number));
+              publishSanitizedOcrReport('pdf_ocr', scannedBlocks);
             }
             lines.push(...pageLines);
             pageDiagnostic.completed = true;
@@ -1291,6 +1361,7 @@
         return;
       }
       const runId = ++activeRun;
+      clearSanitizedOcrReport();
       setDocumentProcessing(true);
       diagnostics = null;
       ui.diagnosticsSection.hidden = true;
@@ -1299,12 +1370,15 @@
       try {
         const worker = await getOcrWorker();
         const text = [];
+        const safeBlocks = [];
         for (let index = 0; index < images.length; index++) {
           setStatus('imageReading', index + 1, images.length);
           const recognized = await recognizeScreenshot(images[index], worker, () => {
             setStatus('imageRetry', index + 1, images.length);
           });
           if (runId !== activeRun) return;
+          safeBlocks.push(sanitizeOcrBlock(recognized, index + 1));
+          publishSanitizedOcrReport('image_ocr', safeBlocks);
           text.push(recognized);
         }
         // The recognized text remains local and is not copied to diagnostics.
@@ -1325,6 +1399,7 @@
 
     async function processPdfFile(file) {
       if (documentProcessing) { setStatus('imageBusy'); return; }
+      clearSanitizedOcrReport();
       const runId = ++activeRun;
       diagnostics = newDiagnostics(file);
       diagnosticsFeedback = '';
@@ -1358,6 +1433,7 @@
 
     function handlePastedText(text) {
       if (documentProcessing) { setStatus('imageBusy'); return; }
+      clearSanitizedOcrReport();
       ui.sourceText.value = text;
       const names = cleanPastedNames(text);
       diagnostics = null;
@@ -1477,6 +1553,7 @@
         return;
       }
       ++activeRun;
+      clearSanitizedOcrReport();
       diagnostics = null;
       ui.diagnosticsSection.hidden = true;
       ui.diagnosticsStatus.textContent = '';
@@ -1506,10 +1583,22 @@
         return;
       }
       ui.debugReport.value = makeSanitizedDebugReport(ui.debugSource.value);
+      ui.debugOcrCopy.hidden = true;
+      ui.debugCopy.hidden = false;
+      ui.debugOutputLabel.textContent = translate('debugOutputLabel');
       ui.debugOutput.hidden = false;
       ui.debugStatus.textContent = translate('debugReady');
     });
-    ui.debugCopy.addEventListener('click', async () => {
+    ui.debugOcrShow.addEventListener('click', () => {
+      if (!latestOcrDebugReport) return;
+      ui.debugReport.value = latestOcrDebugReport;
+      ui.debugCopy.hidden = true;
+      ui.debugOcrCopy.hidden = false;
+      ui.debugOutputLabel.textContent = translate('debugOcrOutputLabel');
+      ui.debugOutput.hidden = false;
+      ui.debugStatus.textContent = translate('debugReady');
+    });
+    async function copyVisibleSanitizedDebug() {
       const report = ui.debugReport.value;
       if (!report || ui.debugOutput.hidden) return;
       try {
@@ -1524,7 +1613,9 @@
       } catch (_) {
         ui.debugStatus.textContent = translate('debugCopyError');
       }
-    });
+    }
+    ui.debugCopy.addEventListener('click', copyVisibleSanitizedDebug);
+    ui.debugOcrCopy.addEventListener('click', copyVisibleSanitizedDebug);
     ui.settingsButton.addEventListener('click', () => {
       ui.settingsPanel.hidden = !ui.settingsPanel.hidden;
       ui.settingsButton.setAttribute('aria-expanded', String(!ui.settingsPanel.hidden));
