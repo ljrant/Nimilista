@@ -45,6 +45,11 @@
     <label for="pdf" id="file-label">PDF file</label>
     <input id="pdf" type="file" accept=".pdf,application/pdf">
     <p id="status" role="status" aria-live="polite"></p>
+    <section id="diagnostics-section" hidden>
+      <button type="button" id="diagnostics-copy">Copy diagnostics</button>
+      <p class="note" id="diagnostics-note">Technical counts and error categories only. No names, PDF text or filename.</p>
+      <p id="diagnostics-status" role="status" aria-live="polite"></p>
+    </section>
 
     <section id="results" hidden>
       <label id="names-label" for="names">Names (0)</label>
@@ -62,10 +67,19 @@
   </main>
 
   <script type="module">
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.min.mjs';
-
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.worker.min.mjs';
+    // Load lazily so diagnostics still work when the PDF library CDN cannot be reached.
+    let pdfLibraryPromise = null;
+    async function getPdfLibrary() {
+      if (!pdfLibraryPromise) {
+        pdfLibraryPromise = import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.min.mjs')
+          .then(lib => {
+            lib.GlobalWorkerOptions.workerSrc =
+              'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.worker.min.mjs';
+            return lib;
+          });
+      }
+      return pdfLibraryPromise;
+    }
 
     const ui = {
       language: document.getElementById('language'),
@@ -76,7 +90,11 @@
       namesLabel: document.getElementById('names-label'),
       names: document.getElementById('names'),
       note: document.getElementById('note'),
-      copyButton: document.getElementById('copy-button')
+      copyButton: document.getElementById('copy-button'),
+      diagnosticsSection: document.getElementById('diagnostics-section'),
+      diagnosticsCopy: document.getElementById('diagnostics-copy'),
+      diagnosticsNote: document.getElementById('diagnostics-note'),
+      diagnosticsStatus: document.getElementById('diagnostics-status')
     };
 
     const messages = {
@@ -93,7 +111,11 @@
         invalid: 'Please select a PDF file.',
         exportError: 'Could not create the export file.',
         copied: 'Copied to clipboard.',
-        copyError: 'Could not copy to clipboard.'
+        copyError: 'Could not copy to clipboard.',
+        diagnosticsCopy: 'Copy diagnostics',
+        diagnosticsNote: 'Only technical counts, processing stages and error categories. No names, PDF text or filename. You can inspect what you paste before sharing.',
+        diagnosticsCopied: 'Diagnostics copied.',
+        diagnosticsCopyError: 'Could not copy diagnostics. Try another browser.'
       },
       fi: {
         file: 'PDF-tiedosto',
@@ -108,7 +130,11 @@
         invalid: 'Valitse PDF-tiedosto.',
         exportError: 'Vientitiedostoa ei voitu luoda.',
         copied: 'Kopioitu leikepöydälle.',
-        copyError: 'Kopiointi epäonnistui.'
+        copyError: 'Kopiointi epäonnistui.',
+        diagnosticsCopy: 'Kopioi diagnostiikka',
+        diagnosticsNote: 'Vain tekniset lukumäärät, käsittelyvaiheet ja virheluokat. Ei nimiä, PDF-tekstiä tai tiedostonimeä. Voit tarkistaa liitettävän raportin ennen jakamista.',
+        diagnosticsCopied: 'Diagnostiikka kopioitu.',
+        diagnosticsCopyError: 'Diagnostiikan kopiointi epäonnistui. Kokeile toista selainta.'
       }
     };
 
@@ -116,7 +142,95 @@
     let statusArgs = [];
     let ocrWorker = null;
     let activeRun = 0;
+    let diagnostics = null;
+    let diagnosticsFeedback = '';
     const loadedScripts = new Map();
+
+    // This report is constructed from a strict set of counters and fixed status codes.
+    // Never add PDF text, extracted names, PDF metadata, filenames, or raw exceptions.
+    function newDiagnostics(file) {
+      return {
+        report_version: 1,
+        app: 'Nimilista',
+        file_size_bytes: Number(file.size) || 0,
+        status: 'processing',
+        stage: 'file_selected',
+        pdf_page_count: null,
+        pages: [],
+        detected_names_count: null,
+        error_code: null
+      };
+    }
+
+    function classifyFailure(error, stage) {
+      const names = {
+        PasswordException: 'PASSWORD_PROTECTED',
+        InvalidPDFException: 'INVALID_PDF',
+        MissingPDFException: 'MISSING_PDF',
+        UnexpectedResponseException: 'PDF_FETCH_ERROR'
+      };
+      if (error && Object.prototype.hasOwnProperty.call(names, error.name)) return names[error.name];
+      if (stage === 'library_load') return 'PDF_LIBRARY_LOAD_FAILED';
+      if (stage === 'ocr') return 'OCR_FAILED';
+      if (stage === 'pdf_open') return 'PDF_OPEN_FAILED';
+      if (stage === 'text_read') return 'TEXT_EXTRACTION_FAILED';
+      if (stage === 'page_load') return 'PAGE_LOAD_FAILED';
+      return 'UNEXPECTED_FAILURE';
+    }
+
+    function safeReport() {
+      if (!diagnostics) return '';
+      const safeNumber = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+      const allowedStages = new Set(['file_selected', 'library_load', 'pdf_open', 'page_load', 'text_read', 'ocr', 'name_extraction', 'done']);
+      const allowedErrors = new Set(['PASSWORD_PROTECTED', 'INVALID_PDF', 'MISSING_PDF', 'PDF_FETCH_ERROR', 'PDF_LIBRARY_LOAD_FAILED', 'OCR_FAILED', 'PDF_OPEN_FAILED', 'TEXT_EXTRACTION_FAILED', 'PAGE_LOAD_FAILED', 'UNEXPECTED_FAILURE', 'INVALID_FILE']);
+      return JSON.stringify({
+        report_version: 1,
+        app: 'Nimilista',
+        file_size_bytes: safeNumber(diagnostics.file_size_bytes),
+        status: ['processing', 'completed', 'failed'].includes(diagnostics.status) ? diagnostics.status : 'failed',
+        stage: allowedStages.has(diagnostics.stage) ? diagnostics.stage : 'file_selected',
+        pdf_page_count: safeNumber(diagnostics.pdf_page_count),
+        pages: diagnostics.pages.map(page => ({
+          page: safeNumber(page.page),
+          text_items: safeNumber(page.text_items),
+          text_characters: safeNumber(page.text_characters),
+          text_lines: safeNumber(page.text_lines),
+          ocr_attempted: page.ocr_attempted === true,
+          ocr_lines: safeNumber(page.ocr_lines),
+          completed: page.completed === true
+        })),
+        detected_names_count: safeNumber(diagnostics.detected_names_count),
+        error_code: allowedErrors.has(diagnostics.error_code) ? diagnostics.error_code : null
+      }, null, 2);
+    }
+
+    async function copyDiagnostics() {
+      const report = safeReport();
+      if (!report) return;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(report);
+        } else {
+          const temp = document.createElement('textarea');
+          temp.value = report;
+          temp.setAttribute('aria-hidden', 'true');
+          temp.style.position = 'fixed';
+          temp.style.left = '-9999px';
+          document.body.appendChild(temp);
+          try {
+            temp.focus();
+            temp.select();
+            if (!document.execCommand('copy')) throw new Error('Copy unavailable');
+          } finally {
+            temp.remove();
+          }
+        }
+        diagnosticsFeedback = 'diagnosticsCopied';
+      } catch (_) {
+        diagnosticsFeedback = 'diagnosticsCopyError';
+      }
+      ui.diagnosticsStatus.textContent = translate(diagnosticsFeedback);
+    }
 
     function translate(key, ...args) {
       const value = messages[ui.language.value][key];
@@ -143,6 +257,9 @@
       ui.fileLabel.textContent = translate('file');
       ui.note.textContent = translate('note');
       ui.copyButton.textContent = translate('copy');
+      ui.diagnosticsCopy.textContent = translate('diagnosticsCopy');
+      ui.diagnosticsNote.textContent = translate('diagnosticsNote');
+      ui.diagnosticsStatus.textContent = diagnosticsFeedback ? translate(diagnosticsFeedback) : '';
       ui.names.setAttribute('aria-label', translate('names'));
       setStatus(currentStatus, ...statusArgs);
       updateCount();
@@ -306,29 +423,51 @@
     }
 
     async function extractPdf(file, runId) {
+      diagnostics.stage = 'library_load';
+      const pdfjsLib = await getPdfLibrary();
+      diagnostics.stage = 'pdf_open';
       const pdf = await pdfjsLib.getDocument({
         data: new Uint8Array(await file.arrayBuffer()),
         isEvalSupported: false
       }).promise;
+      diagnostics.pdf_page_count = pdf.numPages;
       const lines = [];
       try {
         for (let number = 1; number <= pdf.numPages; number++) {
           if (runId !== activeRun) return [];
           setStatus('reading', number, pdf.numPages);
+          const pageDiagnostic = {
+            page: number, text_items: 0, text_characters: 0,
+            text_lines: 0, ocr_attempted: false, ocr_lines: null, completed: false
+          };
+          diagnostics.pages.push(pageDiagnostic);
+          diagnostics.stage = 'page_load';
           const page = await pdf.getPage(number);
-          const text = await page.getTextContent();
-          let pageLines = pdfLines(text.items);
-          // Scanned pages have little or no selectable text.
-          if (pageLines.join(' ').replace(/\s/g, '').length < 20) {
-            setStatus('ocr', number, pdf.numPages);
-            pageLines = await readScannedPage(page);
+          try {
+            diagnostics.stage = 'text_read';
+            const text = await page.getTextContent();
+            pageDiagnostic.text_items = text.items.length;
+            let pageLines = pdfLines(text.items);
+            pageDiagnostic.text_lines = pageLines.length;
+            pageDiagnostic.text_characters = pageLines.reduce((total, line) => total + line.length, 0);
+            // Preserve the original OCR trigger and name-extraction method.
+            if (pageLines.join(' ').replace(/\s/g, '').length < 20) {
+              pageDiagnostic.ocr_attempted = true;
+              diagnostics.stage = 'ocr';
+              setStatus('ocr', number, pdf.numPages);
+              pageLines = await readScannedPage(page);
+              pageDiagnostic.ocr_lines = pageLines.length;
+            }
+            lines.push(...pageLines);
+            pageDiagnostic.completed = true;
+          } finally {
+            page.cleanup();
           }
-          lines.push(...pageLines);
-          page.cleanup();
         }
       } finally {
         await pdf.destroy();
       }
+      diagnostics.stage = 'name_extraction';
       return extractNames(lines);
     }
 
@@ -394,9 +533,15 @@
       const file = ui.file.files && ui.file.files[0];
       if (!file) return;
       const runId = ++activeRun;
+      diagnostics = newDiagnostics(file);
+      diagnosticsFeedback = '';
+      ui.diagnosticsStatus.textContent = '';
+      ui.diagnosticsSection.hidden = false;
       ui.results.hidden = true;
       ui.names.value = '';
       if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
+        diagnostics.status = 'failed';
+        diagnostics.error_code = 'INVALID_FILE';
         setStatus('invalid');
         return;
       }
@@ -404,22 +549,28 @@
       try {
         const names = await extractPdf(file, runId);
         if (runId !== activeRun) return;
+        diagnostics.status = 'completed';
+        diagnostics.stage = 'done';
+        diagnostics.detected_names_count = names.length;
         ui.names.value = names.join('\n');
         updateCount();
         ui.results.hidden = false;
         setStatus('ready', names.length);
       } catch (error) {
-        console.error(error);
+        diagnostics.status = 'failed';
+        diagnostics.error_code = classifyFailure(error, diagnostics.stage);
+        // Do not log raw errors: third-party exceptions may include document data.
         setStatus('error');
       } finally {
         ui.file.disabled = false;
         if (ocrWorker) {
-          await ocrWorker.terminate();
+          try { await ocrWorker.terminate(); } catch (_) { /* Worker already stopped. */ }
           ocrWorker = null;
         }
       }
     });
 
+    ui.diagnosticsCopy.addEventListener('click', copyDiagnostics);
     ui.language.addEventListener('change', localize);
     ui.names.addEventListener('input', updateCount);
     document.querySelectorAll('[data-export]').forEach(button => {
