@@ -259,6 +259,7 @@
         pasteImage: 'Paste screenshot',
         imageHint: 'You can also press Ctrl+V or Cmd+V to paste an image.',
         imageReading: (page, total) => 'Reading image ' + page + ' / ' + total + ' (OCR)…',
+        imageRetry: (page, total) => 'Improving recognition ' + page + ' / ' + total + '…',
         imageReady: (count) => count ? 'Found ' + count + ' names from the image(s). Check the list before exporting.' : 'No names recognized in the image(s). Try a clearer screenshot.',
         imageInvalid: 'Please use PNG, JPG, WebP or BMP images.',
         imageTooLarge: 'Image too large. Please use images smaller than 20 MB each.',
@@ -320,6 +321,7 @@
         pasteImage: 'Liitä kuvakaappaus',
         imageHint: 'Voit liittää kuvan myös näppäimillä Ctrl+V tai Cmd+V.',
         imageReading: (page, total) => 'Tunnistetaan kuvan ' + page + ' / ' + total + ' tekstiä (OCR)…',
+        imageRetry: (page, total) => 'Tarkennetaan tunnistusta ' + page + ' / ' + total + '…',
         imageReady: (count) => count ? 'Kuvista löytyi ' + count + ' nimeä. Tarkista lista ennen vientiä.' : 'Kuvista ei tunnistettu nimiä. Kokeile tarkempaa kuvakaappausta.',
         imageInvalid: 'Valitse PNG-, JPG-, WebP- tai BMP-kuva.',
         imageTooLarge: 'Liian suuri kuva. Kuvan koko saa olla enintään 20 Mt.',
@@ -696,6 +698,14 @@
         await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
         // Tesseract downloads the Finnish and English language models only when needed.
         ocrWorker = await window.Tesseract.createWorker(['eng', 'fin']);
+        // Prefer automatic page segmentation and keep visual word gaps.
+        try {
+          await ocrWorker.setParameters({
+            tessedit_pageseg_mode: String(window.Tesseract.PSM?.AUTO ?? '3'),
+            preserve_interword_spaces: '1',
+            user_defined_dpi: '300'
+          });
+        } catch (_) { /* Keep engine defaults if unsupported. */ }
       }
       return ocrWorker;
     }
@@ -1125,6 +1135,142 @@
       ui.sourceText.disabled = value;
     }
 
+
+    // Prepare small screenshots, low-contrast text, and dark-mode captures.
+    // Keep anti-aliasing: binary thresholding often destroys Finnish accents.
+    async function prepareOcrImage(blob) {
+      let source;
+      let release = () => {};
+      if (typeof createImageBitmap === 'function') {
+        source = await createImageBitmap(blob);
+        release = () => source.close();
+      } else {
+        const url = URL.createObjectURL(blob);
+        try {
+          source = await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error('Cannot decode image'));
+            image.src = url;
+          });
+        } finally { URL.revokeObjectURL(url); }
+      }
+
+      try {
+        const width = source.width || source.naturalWidth;
+        const height = source.height || source.naturalHeight;
+        if (!(width > 0 && height > 0)) throw new Error('Empty image');
+        const longSide = Math.max(width, height);
+        const scale = Math.min(3, Math.max(1, 2500 / longSide),
+          4000 / longSide, Math.sqrt(10000000 / (width * height)));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        if (!context) throw new Error('No 2D context');
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const values = imageData.data;
+        const histogram = new Uint32Array(256);
+        const count = canvas.width * canvas.height;
+        const stride = Math.max(1, Math.floor(count / 30000));
+        let sampleCount = 0;
+        let sum = 0;
+
+        for (let p = 0; p < count; p += stride) {
+          const index = p * 4;
+          const grey = Math.round(values[index] * .299 +
+            values[index + 1] * .587 + values[index + 2] * .114);
+          histogram[grey]++;
+          sampleCount++;
+          sum += grey;
+        }
+        const invert = sum / Math.max(sampleCount, 1) < 115;
+        function percentile(frac) {
+          let countSoFar = 0;
+          const limit = sampleCount * frac;
+          for (let i = 0; i < 256; i++) {
+            const value = invert ? 255 - i : i;
+            countSoFar += histogram[value];
+            if (countSoFar >= limit) return i;
+          }
+          return 255;
+        }
+        const low = percentile(.02);
+        const high = percentile(.98);
+        const boost = 255 / Math.max(100, high - low);
+        for (let index = 0; index < values.length; index += 4) {
+          let grey = Math.round(values[index] * .299 +
+            values[index + 1] * .587 + values[index + 2] * .114);
+          if (invert) grey = 255 - grey;
+          grey = Math.max(0, Math.min(255, Math.round((grey - low) * boost)));
+          values[index] = values[index + 1] = values[index + 2] = grey;
+          values[index + 3] = 255;
+        }
+        context.putImageData(imageData, 0, 0);
+        return canvas;
+      } finally { release(); }
+    }
+
+    function ocrResult(result) {
+      const text = typeof result?.data?.text === 'string' ? result.data.text : '';
+      const confidence = Number.isFinite(result?.data?.confidence)
+        ? result.data.confidence : 0;
+      return { text, names: cleanPastedNames(text), confidence };
+    }
+
+    function bestOcrResult(first, second) {
+      if (!second) return first;
+      // More recognized names are helpful, but reject a low-confidence
+      // alternative when the first pass already found real candidates.
+      if (second.names.length > first.names.length &&
+          (second.confidence >= 40 || first.names.length === 0)) return second;
+      if (second.names.length === first.names.length &&
+          second.confidence > first.confidence + 8) return second;
+      return first;
+    }
+
+    async function recognizeScreenshot(blob, worker, onRetry) {
+      let prepared;
+      try { prepared = await prepareOcrImage(blob); } catch (_) {
+        // Decoder and canvas limitations should not prevent original OCR.
+      }
+      try {
+        await worker.setParameters({
+          tessedit_pageseg_mode: String(window.Tesseract.PSM?.AUTO ?? '3'),
+          preserve_interword_spaces: '1'
+        });
+      } catch (_) {}
+      let first;
+      try {
+        first = ocrResult(await worker.recognize(prepared || blob, { rotateAuto: true }));
+      } catch (_) {
+        if (!prepared) throw new Error('Image recognition failed');
+        first = ocrResult(await worker.recognize(blob));
+      } finally {
+        if (prepared) {
+          prepared.width = 0;
+          prepared.height = 0;
+        }
+      }
+      if (first.names.length && first.confidence >= 73) return first.text;
+      onRetry();
+      try {
+        await worker.setParameters({
+          tessedit_pageseg_mode: String(window.Tesseract.PSM?.SPARSE_TEXT ?? '11'),
+          preserve_interword_spaces: '1'
+        });
+        const second = ocrResult(await worker.recognize(blob, { rotateAuto: true }));
+        return bestOcrResult(first, second).text;
+      } catch (_) {
+        return first.text;
+      }
+    }
+
     async function processImages(blobs) {
       if (documentProcessing) {
         setStatus('imageBusy');
@@ -1135,7 +1281,8 @@
         setStatus('imageClipboardEmpty');
         return;
       }
-      if (images.some(image => !supportedImageTypes.has(image.type))) {
+      if (images.some(image => !supportedImageTypes.has(image.type) &&
+          !/\.(?:png|jpe?g|webp|bmp)$/i.test(image.name || ''))) {
         setStatus('imageInvalid');
         return;
       }
@@ -1154,11 +1301,11 @@
         const text = [];
         for (let index = 0; index < images.length; index++) {
           setStatus('imageReading', index + 1, images.length);
-          const result = await worker.recognize(images[index]);
+          const recognized = await recognizeScreenshot(images[index], worker, () => {
+            setStatus('imageRetry', index + 1, images.length);
+          });
           if (runId !== activeRun) return;
-          if (result && result.data && typeof result.data.text === 'string') {
-            text.push(result.data.text);
-          }
+          text.push(recognized);
         }
         // The recognized text remains local and is not copied to diagnostics.
         const names = cleanPastedNames(text.join('\n'));
