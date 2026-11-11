@@ -24,8 +24,16 @@
     .name-options { display: flex; flex-wrap: wrap; gap: 8px 14px; }
     .name-options button { padding: 2px 0; border: 0; border-bottom: 1px solid #aaa; color: #666; background: none; font-size: 13px; }
     .name-options button[aria-pressed="true"] { color: #111; border-bottom: 2px solid #111; font-weight: 600; }
-    .image-input-section { margin-top: 22px; }
-    .setting-hint { font-size: 13px; color: #666; align-self: center; }
+    .input-zone { margin-top: 4px; border: 1px solid #aaa; padding: 6px 10px 9px; transition: border-color .12s, background-color .12s; }
+    .input-zone:focus-within { outline: 2px solid #444; outline-offset: 2px; }
+    .input-zone.drag-over { border-color: #111; background: #f6f6f6; outline: 2px dashed #777; outline-offset: 2px; }
+    .input-zone #source-text { border: 0; width: 100%; min-height: 155px; height: 160px; resize: vertical; padding: 8px 2px; font: inherit; outline: 0; }
+    .input-zone #source-text:focus-visible { outline: none; }
+    .input-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 6px 2px 0; border-top: 1px solid #eee; }
+    .input-actions .input-tools { display: flex; align-items: center; gap: 14px; }
+    .input-tools button { border: 0; border-bottom: 1px solid #bbb; padding: 3px 0; font-size: 13px; color: #555; }
+    .input-actions #clean-button { padding: 5px 12px; }
+    .drop-hint { color: #777; font-size: 12px; margin: 7px 2px 0; }
     h1 { font-size: 24px; font-weight: 600; margin: 0; }
     label { display: block; margin-bottom: 8px; }
     input[type="file"] { display: block; width: 100%; max-width: 100%; font: inherit; }
@@ -79,19 +87,20 @@
     </section>
 
     <section id="normal-view">
-    <label for="pdf" id="file-label">PDF file</label>
-    <input id="pdf" type="file" accept=".pdf,application/pdf">
-    <label for="source-text" id="paste-label">Or paste text</label>
-    <textarea id="source-text" rows="7" spellcheck="false" placeholder="Paste copied text here"></textarea>
-    <div class="exports"><button type="button" id="clean-button">Clean name list</button></div>
-    <div class="image-input-section">
-      <label for="image-file" id="image-label">Or select image(s)</label>
-      <input type="file" id="image-file" accept="image/png,image/jpeg,image/webp,image/bmp" multiple>
-      <div class="exports">
-        <button type="button" id="paste-image">Paste screenshot</button>
-        <span id="image-hint" class="setting-hint">You can also press Ctrl+V or Cmd+V to paste an image.</span>
+    <section id="input-zone" class="input-zone" aria-label="Name list input">
+      <label for="pdf" id="file-label" class="sr-only">Choose file</label>
+      <input id="pdf" type="file" accept=".pdf,application/pdf,image/png,image/jpeg,image/webp,image/bmp,.txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" multiple hidden>
+      <label for="source-text" id="paste-label" class="sr-only">Paste text or an image</label>
+      <textarea id="source-text" spellcheck="false" placeholder="Paste text, paste a screenshot, or drop a file here"></textarea>
+      <div class="input-actions">
+        <div class="input-tools">
+          <button type="button" id="choose-file">Choose file</button>
+          <button type="button" id="paste-image">Paste</button>
+        </div>
+        <button type="button" id="clean-button">Extract names</button>
       </div>
-    </div>
+      <p class="drop-hint" id="image-hint">PDF · image · text · drag & drop · Ctrl+V</p>
+    </section>
     <p id="status" role="status" aria-live="polite"></p>
     <section id="diagnostics-section" hidden>
       <button type="button" id="diagnostics-copy">Copy diagnostics</button>
@@ -163,8 +172,8 @@
       note: document.getElementById('note'),
       copyButton: document.getElementById('copy-button'),
       sourceText: document.getElementById('source-text'),
-      imageFile: document.getElementById('image-file'),
-      imageLabel: document.getElementById('image-label'),
+      inputZone: document.getElementById('input-zone'),
+      chooseFile: document.getElementById('choose-file'),
       pasteImage: document.getElementById('paste-image'),
       imageHint: document.getElementById('image-hint'),
       pasteLabel: document.getElementById('paste-label'),
@@ -211,7 +220,12 @@
         lastFirst: 'Last name first',
         hideMiddle: 'Hide middle names',
         pasteLabel: 'Or paste text',
-        pastePlaceholder: 'Paste copied text here',
+        pastePlaceholder: 'Paste text, paste a screenshot, or drop a file here',
+        inputLabel: 'Name list input',
+        dropHint: 'PDF · image · text · drag & drop · Ctrl+V',
+        pasteClipboard: 'Paste',
+        invalidDrop: 'Choose a PDF, image, or text file. For multiple files, select images only.',
+        textFileError: 'Could not read this text file.',
         imageLabel: 'Or select image(s)',
         pasteImage: 'Paste screenshot',
         imageHint: 'You can also press Ctrl+V or Cmd+V to paste an image.',
@@ -266,7 +280,12 @@
         lastFirst: 'Sukunimi ensin',
         hideMiddle: 'Piilota välinimet',
         pasteLabel: 'Tai liitä teksti',
-        pastePlaceholder: 'Liitä kopioitu teksti tähän',
+        pastePlaceholder: 'Liitä teksti, kuvakaappaus tai pudota tiedosto tähän',
+        inputLabel: 'Nimilistan syöttö',
+        dropHint: 'PDF · kuva · teksti · vedä ja pudota · Ctrl+V',
+        pasteClipboard: 'Liitä',
+        invalidDrop: 'Valitse PDF-, kuva- tai tekstitiedosto. Useita tiedostoja voi valita vain kuvista.',
+        textFileError: 'Tekstitiedoston lukeminen epäonnistui.',
         imageLabel: 'Tai valitse kuva(t)',
         pasteImage: 'Liitä kuvakaappaus',
         imageHint: 'Voit liittää kuvan myös näppäimillä Ctrl+V tai Cmd+V.',
@@ -544,9 +563,10 @@
       ui.hideMiddleButton.textContent = translate('hideMiddle');
       ui.pasteLabel.textContent = translate('pasteLabel');
       ui.sourceText.placeholder = translate('pastePlaceholder');
-      ui.imageLabel.textContent = translate('imageLabel');
-      ui.pasteImage.textContent = translate('pasteImage');
-      ui.imageHint.textContent = translate('imageHint');
+      ui.chooseFile.textContent = translate('file');
+      ui.pasteImage.textContent = translate('pasteClipboard');
+      ui.imageHint.textContent = translate('dropHint');
+      ui.inputZone.setAttribute('aria-label', translate('inputLabel'));
       ui.sourceText.setAttribute('aria-label', translate('pasteLabel'));
       ui.cleanButton.textContent = translate('cleanButton');
       ui.openDebug.textContent = translate('debugLink');
@@ -1064,9 +1084,10 @@
     function setDocumentProcessing(value) {
       documentProcessing = value;
       ui.file.disabled = value;
-      ui.imageFile.disabled = value;
+      ui.chooseFile.disabled = value;
       ui.pasteImage.disabled = value;
       ui.cleanButton.disabled = value;
+      ui.sourceText.disabled = value;
     }
 
     async function processImages(blobs) {
@@ -1120,9 +1141,7 @@
       }
     }
 
-    ui.file.addEventListener('change', async () => {
-      const file = ui.file.files && ui.file.files[0];
-      if (!file) return;
+    async function processPdfFile(file) {
       if (documentProcessing) { setStatus('imageBusy'); return; }
       const runId = ++activeRun;
       diagnostics = newDiagnostics(file);
@@ -1131,12 +1150,6 @@
       ui.diagnosticsSection.hidden = false;
       ui.results.hidden = true;
       ui.names.value = '';
-      if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') {
-        diagnostics.status = 'failed';
-        diagnostics.error_code = 'INVALID_FILE';
-        setStatus('invalid');
-        return;
-      }
       setDocumentProcessing(true);
       try {
         const names = await extractPdf(file, runId);
@@ -1149,53 +1162,129 @@
       } catch (error) {
         diagnostics.status = 'failed';
         diagnostics.error_code = classifyFailure(error, diagnostics.stage);
-        // Fixed whitelist of JavaScript error types, without names or exception messages.
-        const safeTypes = new Set(['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'Error', 'PasswordException', 'InvalidPDFException', 'MissingPDFException', 'UnknownErrorException']);
+        const safeTypes = new Set(['TypeError','ReferenceError','RangeError','SyntaxError','Error','PasswordException','InvalidPDFException','MissingPDFException','UnknownErrorException']);
         diagnostics.error_type = error && safeTypes.has(error.name) ? error.name : null;
-        // Do not log raw errors: third-party exceptions may include document data.
         setStatus('error');
       } finally {
         if (ocrWorker) {
-          try { await ocrWorker.terminate(); } catch (_) { /* Worker already stopped. */ }
+          try { await ocrWorker.terminate(); } catch (_) {}
           ocrWorker = null;
         }
         setDocumentProcessing(false);
       }
-    });
+    }
 
-    ui.imageFile.addEventListener('change', () => {
-      const images = Array.from(ui.imageFile.files || []);
-      ui.imageFile.value = '';
-      if (images.length) processImages(images);
+    function handlePastedText(text) {
+      if (documentProcessing) { setStatus('imageBusy'); return; }
+      ui.sourceText.value = text;
+      const names = cleanPastedNames(text);
+      diagnostics = null;
+      ui.diagnosticsSection.hidden = true;
+      ui.diagnosticsStatus.textContent = '';
+      showNames(names);
+      setStatus('cleanReady', getNames().length);
+    }
+
+    function fileKind(file) {
+      const type = file.type || '';
+      const name = file.name || '';
+      if (type === 'application/pdf' || /\.pdf$/i.test(name)) return 'pdf';
+      if (supportedImageTypes.has(type) || /\.(png|jpe?g|webp|bmp)$/i.test(name)) return 'image';
+      if (['text/plain','text/csv','text/tab-separated-values'].includes(type) || /\.(txt|csv|tsv)$/i.test(name)) return 'text';
+      return 'unsupported';
+    }
+
+    async function handleInputFiles(fileList) {
+      if (documentProcessing) { setStatus('imageBusy'); return; }
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      const kinds = files.map(fileKind);
+      if (kinds.every(kind => kind === 'image')) {
+        await processImages(files);
+      } else if (files.length === 1 && kinds[0] === 'pdf') {
+        await processPdfFile(files[0]);
+      } else if (files.length === 1 && kinds[0] === 'text') {
+        try {
+          const file = files[0];
+          if (file.size > maxImageSize) { setStatus('imageTooLarge'); return; }
+          handlePastedText(await file.text());
+        } catch (_) { setStatus('textFileError'); }
+      } else {
+        setStatus('invalidDrop');
+      }
+    }
+
+    ui.chooseFile.addEventListener('click', () => {
+      if (!documentProcessing) ui.file.click();
+    });
+    ui.file.addEventListener('change', () => {
+      const selected = Array.from(ui.file.files || []);
+      ui.file.value = '';
+      handleInputFiles(selected);
+    });
+    ui.inputZone.addEventListener('dragenter', event => {
+      if (event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files')) {
+        event.preventDefault();
+        ui.inputZone.classList.add('drag-over');
+      }
+    });
+    ui.inputZone.addEventListener('dragover', event => {
+      if (event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files')) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = documentProcessing ? 'none' : 'copy';
+        if (!documentProcessing) ui.inputZone.classList.add('drag-over');
+      }
+    });
+    ui.inputZone.addEventListener('dragleave', event => {
+      if (!ui.inputZone.contains(event.relatedTarget)) ui.inputZone.classList.remove('drag-over');
+    });
+    ui.inputZone.addEventListener('drop', event => {
+      event.preventDefault();
+      ui.inputZone.classList.remove('drag-over');
+      if (event.dataTransfer && event.dataTransfer.files.length) {
+        handleInputFiles(event.dataTransfer.files);
+      } else if (event.dataTransfer) {
+        const text = event.dataTransfer.getData('text/plain');
+        if (text) handlePastedText(text);
+      }
     });
     ui.pasteImage.addEventListener('click', async () => {
       if (documentProcessing) { setStatus('imageBusy'); return; }
-      if (!navigator.clipboard || !navigator.clipboard.read) {
-        setStatus('imageClipboardUnsupported');
-        return;
-      }
+      if (!navigator.clipboard) { setStatus('imageClipboardUnsupported'); return; }
       try {
-        const items = await navigator.clipboard.read();
-        if (documentProcessing) { setStatus('imageBusy'); return; }
-        const images = [];
-        for (const item of items) {
-          const type = item.types.find(type => supportedImageTypes.has(type));
-          if (type) images.push(await item.getType(type));
+        if (navigator.clipboard.read) {
+          const items = await navigator.clipboard.read();
+          const images = [];
+          for (const item of items) {
+            const type = item.types.find(type => supportedImageTypes.has(type));
+            if (type) images.push(await item.getType(type));
+          }
+          if (images.length) { await processImages(images); return; }
         }
-        await processImages(images);
-      } catch (_) {
-        setStatus('imageClipboardDenied');
-      }
+        if (navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text.trim()) { handlePastedText(text); return; }
+        }
+        setStatus('imageClipboardEmpty');
+      } catch (_) { setStatus('imageClipboardDenied'); }
     });
-    document.addEventListener('paste', event => {
-      if (ui.normalView.hidden || documentProcessing || !event.clipboardData) return;
+    ui.inputZone.addEventListener('paste', event => {
+      if (documentProcessing || !event.clipboardData) return;
       const images = Array.from(event.clipboardData.items || [])
         .filter(item => supportedImageTypes.has(item.type))
         .map(item => item.getAsFile())
         .filter(Boolean);
-      if (!images.length) return;
-      event.preventDefault();
-      processImages(images);
+      if (images.length) {
+        event.preventDefault();
+        processImages(images);
+      } else if (event.target !== ui.sourceText) {
+        const text = event.clipboardData.getData('text/plain');
+        if (text) {
+          event.preventDefault();
+          handlePastedText(text);
+        }
+      }
+      // Native text paste into the textarea remains editable; click Extract names.
     });
 
     ui.cleanButton.addEventListener('click', () => {
