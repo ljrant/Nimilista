@@ -9,7 +9,21 @@
     * { box-sizing: border-box; }
     body { margin: 0; background: #fff; color: #111; font: 16px/1.5 Arial, Helvetica, sans-serif; }
     main { max-width: 760px; padding: 40px 20px; margin: 0 auto; }
-    header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 32px; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 24px; }
+    .header-tools { display: flex; align-items: center; gap: 12px; }
+    .gear { padding: 0 3px; line-height: 1; background: none; border: none; font-size: 21px; color: #555; }
+    .gear:hover { background: #f4f4f4; }
+    #settings-panel { padding: 12px 0 16px; margin: -8px 0 25px; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; }
+    .settings-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .settings-top h2 { font-size: 16px; font-weight: 600; margin: 0; }
+    .settings-check { display: flex; align-items: center; gap: 9px; margin-top: 12px; }
+    .settings-check input { margin: 0; }
+    .settings-note { color: #666; font-size: 13px; margin: 8px 0 0; }
+    .name-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 8px; }
+    .name-heading #names-label { margin-bottom: 0; }
+    .name-options { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+    .name-options button { padding: 2px 0; border: 0; border-bottom: 1px solid #aaa; color: #666; background: none; font-size: 13px; }
+    .name-options button[aria-pressed="true"] { color: #111; border-bottom: 2px solid #111; font-weight: 600; }
     h1 { font-size: 24px; font-weight: 600; margin: 0; }
     label { display: block; margin-bottom: 8px; }
     input[type="file"] { display: block; width: 100%; max-width: 100%; font: inherit; }
@@ -39,14 +53,28 @@
   <main>
     <header>
       <h1>Nimilista</h1>
-      <label for="language">
-        <span class="sr-only">Language / Kieli</span>
-        <select id="language" aria-label="Language / Kieli">
-          <option value="en">English</option>
-          <option value="fi">Suomi</option>
-        </select>
-      </label>
+      <div class="header-tools">
+        <label for="language">
+          <span class="sr-only">Language / Kieli</span>
+          <select id="language" aria-label="Language / Kieli">
+            <option value="en">English</option>
+            <option value="fi">Suomi</option>
+          </select>
+        </label>
+        <button type="button" class="gear" id="open-settings" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-panel"><span aria-hidden="true">⚙︎</span></button>
+      </div>
     </header>
+    <section id="settings-panel" hidden aria-labelledby="settings-title">
+      <div class="settings-top">
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="quiet-link" id="close-settings">Close</button>
+      </div>
+      <label class="settings-check" for="filter-products">
+        <input type="checkbox" id="filter-products" checked>
+        <span id="filter-products-label">Filter known product names</span>
+      </label>
+      <p class="settings-note" id="settings-note">Remove common software and service names from the result.</p>
+    </section>
 
     <section id="normal-view">
     <label for="pdf" id="file-label">PDF file</label>
@@ -62,7 +90,13 @@
     </section>
 
     <section id="results" hidden>
-      <label id="names-label" for="names">Names (0)</label>
+      <div class="name-heading">
+        <label id="names-label" for="names">Names (0)</label>
+        <div class="name-options" aria-label="Name formatting">
+          <button type="button" id="last-first" aria-pressed="false">Last name first</button>
+          <button type="button" id="hide-middle" aria-pressed="false">Hide middle names</button>
+        </div>
+      </div>
       <textarea id="names" spellcheck="false" aria-label="Extracted names"></textarea>
       <div class="exports">
         <button type="button" data-export="txt">TXT</button>
@@ -125,6 +159,15 @@
       diagnosticsCopy: document.getElementById('diagnostics-copy'),
       diagnosticsNote: document.getElementById('diagnostics-note'),
       diagnosticsStatus: document.getElementById('diagnostics-status'),
+      settingsButton: document.getElementById('open-settings'),
+      settingsPanel: document.getElementById('settings-panel'),
+      settingsTitle: document.getElementById('settings-title'),
+      settingsClose: document.getElementById('close-settings'),
+      settingsNote: document.getElementById('settings-note'),
+      filterProducts: document.getElementById('filter-products'),
+      filterProductsLabel: document.getElementById('filter-products-label'),
+      lastFirstButton: document.getElementById('last-first'),
+      hideMiddleButton: document.getElementById('hide-middle'),
       normalView: document.getElementById('normal-view'),
       debugView: document.getElementById('debug-view'),
       openDebug: document.getElementById('open-debug'),
@@ -147,6 +190,12 @@
         names: 'Names',
         note: 'Your PDF stays in your browser. Check the names before exporting.',
         copy: 'Copy',
+        settings: 'Settings',
+        settingsClose: 'Close',
+        filterProducts: 'Filter known product names',
+        settingsNote: 'Common software and services are removed from the result. Other options can be added here later.',
+        lastFirst: 'Last name first',
+        hideMiddle: 'Hide middle names',
         pasteLabel: 'Or paste text',
         pastePlaceholder: 'Paste copied text here',
         cleanButton: 'Clean name list',
@@ -184,6 +233,12 @@
         names: 'Nimet',
         note: 'PDF-tiedosto käsitellään selaimessasi. Tarkista nimet ennen vientiä.',
         copy: 'Kopioi',
+        settings: 'Asetukset',
+        settingsClose: 'Sulje',
+        filterProducts: 'Poista tunnetut tuotenimet',
+        settingsNote: 'Yleiset ohjelmistot ja palvelut poistetaan nimilistasta. Muita asetuksia voi lisätä tänne myöhemmin.',
+        lastFirst: 'Sukunimi ensin',
+        hideMiddle: 'Piilota välinimet',
         pasteLabel: 'Tai liitä teksti',
         pastePlaceholder: 'Liitä kopioitu teksti tähän',
         cleanButton: 'Siisti nimilista',
@@ -224,6 +279,11 @@
     let activeRun = 0;
     let diagnostics = null;
     let diagnosticsFeedback = '';
+    let sourceNames = [];
+    let lastRenderedRows = [];
+    let lastNameFirst = false;
+    let hideMiddleNames = false;
+    let filterProductsEnabled = true;
     const loadedScripts = new Map();
 
     // This report is constructed from a strict set of counters and fixed status codes.
@@ -335,8 +395,95 @@
       ui.status.textContent = translate(key, ...args);
     }
 
+
+    // Match only exact product names; broad keywords can match people.
+    const knownProductNames = new Set([
+      'google classroom', 'microsoft teams', 'visma logo',
+      'google meet', 'google drive', 'google docs', 'google sheets',
+      'google slides', 'microsoft word', 'microsoft excel',
+      'microsoft powerpoint', 'microsoft outlook',
+      'microsoft onedrive', 'microsoft sharepoint', 'microsoft office',
+      'adobe acrobat', 'visma wilma', 'visma inschool'
+    ]);
+    function isKnownProductName(value) {
+      const key = String(value || '').normalize('NFKC').toLocaleLowerCase('fi')
+        .replace(/[®™]/g, '').replace(/\s+/g, ' ').trim();
+      return knownProductNames.has(key);
+    }
+
+    // Keep original full names so both display options can be reversed.
+    function formatPersonName(value, lastFirst = lastNameFirst, hideMiddle = hideMiddleNames) {
+      const words = String(value || '').trim().split(/\s+/).filter(Boolean);
+      if (words.length < 2) return words.join(' ');
+      let surnameStart = words.length - 1;
+      while (surnameStart > 1 && particles.has(words[surnameStart - 1].toLocaleLowerCase('fi'))) {
+        surnameStart--;
+      }
+      const given = words.slice(0, surnameStart);
+      const family = words.slice(surnameStart);
+      const shownGiven = hideMiddle ? given.slice(0, 1) : given;
+      return (lastFirst ? family.concat(shownGiven) : shownGiven.concat(family)).join(' ');
+    }
+
+    // Convert only newly edited rows from displayed order to source order.
+    function undoNameFormatting(displayed) {
+      const value = displayed.trim();
+      if (!lastNameFirst) return value;
+      const words = value.replace(',', ' ').split(/\s+/).filter(Boolean);
+      if (words.length < 2) return value;
+      let surnameEnd = 1;
+      if (particles.has(words[0].toLocaleLowerCase('fi'))) {
+        while (surnameEnd < words.length - 1 &&
+               particles.has(words[surnameEnd].toLocaleLowerCase('fi'))) surnameEnd++;
+        surnameEnd = Math.min(surnameEnd + 1, words.length - 1);
+      }
+      return words.slice(surnameEnd).concat(words.slice(0, surnameEnd)).join(' ');
+    }
+
+    // Preserve unedited full names if users manually change other rows.
+    function syncEditedNames() {
+      const visible = ui.names.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const old = lastRenderedRows.map(row => row.displayed);
+      if (visible.length === old.length && visible.every((item, i) => item === old[i])) return;
+      const lookup = new Map();
+      for (const row of lastRenderedRows) {
+        if (!lookup.has(row.displayed)) lookup.set(row.displayed, []);
+        lookup.get(row.displayed).push(row.source);
+      }
+      const replacements = visible.map(item => {
+        const queue = lookup.get(item);
+        return queue && queue.length ? queue.shift() : undoNameFormatting(item);
+      });
+      const next = [];
+      let i = 0;
+      for (const oldName of sourceNames) {
+        if (filterProductsEnabled && isKnownProductName(oldName)) next.push(oldName);
+        else if (i < replacements.length) next.push(replacements[i++]);
+      }
+      while (i < replacements.length) next.push(replacements[i++]);
+      sourceNames = next;
+    }
+
+    function renderNames() {
+      lastRenderedRows = sourceNames
+        .filter(name => !filterProductsEnabled || !isKnownProductName(name))
+        .map(name => ({ source: name, displayed: formatPersonName(name) }));
+      ui.names.value = lastRenderedRows.map(row => row.displayed).join('\n');
+      ui.lastFirstButton.setAttribute('aria-pressed', String(lastNameFirst));
+      ui.hideMiddleButton.setAttribute('aria-pressed', String(hideMiddleNames));
+      updateCount();
+    }
+
+    function showNames(names) {
+      sourceNames = names.slice();
+      renderNames();
+      ui.results.hidden = false;
+    }
+
     function getNames() {
-      return ui.names.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      return ui.names.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+        .filter(name => !filterProductsEnabled ||
+          (!isKnownProductName(name) && !isKnownProductName(undoNameFormatting(name))));
     }
 
     function updateCount() {
@@ -348,6 +495,14 @@
       ui.fileLabel.textContent = translate('file');
       ui.note.textContent = translate('note');
       ui.copyButton.textContent = translate('copy');
+      ui.settingsButton.setAttribute('aria-label', translate('settings'));
+      ui.settingsButton.title = translate('settings');
+      ui.settingsTitle.textContent = translate('settings');
+      ui.settingsClose.textContent = translate('settingsClose');
+      ui.settingsNote.textContent = translate('settingsNote');
+      ui.filterProductsLabel.textContent = translate('filterProducts');
+      ui.lastFirstButton.textContent = translate('lastFirst');
+      ui.hideMiddleButton.textContent = translate('hideMiddle');
       ui.pasteLabel.textContent = translate('pasteLabel');
       ui.sourceText.placeholder = translate('pastePlaceholder');
       ui.sourceText.setAttribute('aria-label', translate('pasteLabel'));
@@ -883,10 +1038,8 @@
         diagnostics.status = 'completed';
         diagnostics.stage = 'done';
         diagnostics.detected_names_count = names.length;
-        ui.names.value = names.join('\n');
-        updateCount();
-        ui.results.hidden = false;
-        setStatus('ready', names.length);
+        showNames(names);
+        setStatus('ready', getNames().length);
       } catch (error) {
         diagnostics.status = 'failed';
         diagnostics.error_code = classifyFailure(error, diagnostics.stage);
@@ -914,10 +1067,8 @@
       ui.diagnosticsSection.hidden = true;
       ui.diagnosticsStatus.textContent = '';
       const names = cleanPastedNames(ui.sourceText.value);
-      ui.names.value = names.join('\n');
-      updateCount();
-      ui.results.hidden = false;
-      setStatus('cleanReady', names.length);
+      showNames(names);
+      setStatus('cleanReady', getNames().length);
     });
     ui.openDebug.addEventListener('click', () => {
       ui.normalView.hidden = true;
@@ -959,6 +1110,37 @@
       } catch (_) {
         ui.debugStatus.textContent = translate('debugCopyError');
       }
+    });
+    ui.settingsButton.addEventListener('click', () => {
+      ui.settingsPanel.hidden = !ui.settingsPanel.hidden;
+      ui.settingsButton.setAttribute('aria-expanded', String(!ui.settingsPanel.hidden));
+    });
+    ui.settingsClose.addEventListener('click', () => {
+      ui.settingsPanel.hidden = true;
+      ui.settingsButton.setAttribute('aria-expanded', 'false');
+      ui.settingsButton.focus();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !ui.settingsPanel.hidden) {
+        ui.settingsPanel.hidden = true;
+        ui.settingsButton.setAttribute('aria-expanded', 'false');
+        ui.settingsButton.focus();
+      }
+    });
+    ui.filterProducts.addEventListener('change', () => {
+      syncEditedNames();
+      filterProductsEnabled = ui.filterProducts.checked;
+      renderNames();
+    });
+    ui.lastFirstButton.addEventListener('click', () => {
+      syncEditedNames();
+      lastNameFirst = !lastNameFirst;
+      renderNames();
+    });
+    ui.hideMiddleButton.addEventListener('click', () => {
+      syncEditedNames();
+      hideMiddleNames = !hideMiddleNames;
+      renderNames();
     });
     ui.diagnosticsCopy.addEventListener('click', copyDiagnostics);
     ui.language.addEventListener('change', localize);
