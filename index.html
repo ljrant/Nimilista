@@ -1286,11 +1286,127 @@
       } finally { release(); }
     }
 
+
+    // Reassemble OCR words by geometry instead of trusting paragraph order.
+    // Tesseract.js 5 exposes word boxes (or TSV). OCR content stays local.
+    function positionedOcrText(data) {
+      let words = [];
+      if (Array.isArray(data?.words)) {
+        words = data.words.map(item => ({
+          text: String(item.text || '').trim(),
+          x: Number(item.bbox?.x0), y: Number(item.bbox?.y0),
+          right: Number(item.bbox?.x1), bottom: Number(item.bbox?.y1)
+        }));
+      }
+      if (!words.length && typeof data?.tsv === 'string') {
+        words = data.tsv.split(/\r?\n/).slice(1, 10001).map(line => {
+          const parts = line.split('\t');
+          if (parts.length < 12 || parts[0] !== '5') return null;
+          const x = Number(parts[6]), y = Number(parts[7]);
+          return { text: parts.slice(11).join('\t').trim(), x, y,
+            right: x + Number(parts[8]), bottom: y + Number(parts[9]) };
+        }).filter(Boolean);
+      }
+      words = words.filter(item => item.text &&
+        Number.isFinite(item.x) && Number.isFinite(item.y) &&
+        Number.isFinite(item.right) && Number.isFinite(item.bottom) &&
+        item.right > item.x && item.bottom > item.y).slice(0, 10000);
+      if (words.length < 2) return '';
+      const rows = [];
+      words.sort((a, b) => (a.y + a.bottom) / 2 - (b.y + b.bottom) / 2 || a.x - b.x);
+      for (const word of words) {
+        const center = (word.y + word.bottom) / 2;
+        const height = word.bottom - word.y;
+        let selected = null;
+        let distance = Infinity;
+        for (const row of rows) {
+          const delta = Math.abs(center - row.center);
+          if (delta <= Math.max(3, Math.min(height, row.height) * .58) &&
+              delta < distance) {
+            selected = row;
+            distance = delta;
+          }
+        }
+        if (!selected) {
+          rows.push({ center, height, words: [word] });
+        } else {
+          selected.words.push(word);
+          const n = selected.words.length;
+          selected.center = (selected.center * (n - 1) + center) / n;
+          selected.height = (selected.height * (n - 1) + height) / n;
+        }
+      }
+      rows.sort((a, b) => a.center - b.center);
+      return rows.map(row => {
+        row.words.sort((a, b) => a.x - b.x);
+        let line = '';
+        let previous = null;
+        for (const word of row.words) {
+          if (previous) {
+            const gap = word.x - previous.right;
+            const height = Math.min(row.height, word.bottom - word.y);
+            line += gap > Math.max(15, height * 1.45) ? '\t' : ' ';
+          }
+          line += word.text;
+          previous = word;
+        }
+        return line.trim();
+      }).filter(Boolean).join('\n');
+    }
+
+    // Some roster rows wrap a surname to the next OCR line. Only join a
+    // numbered, one-word, class-coded row to a lone capitalized word.
+    function repairWrappedRosterRows(text) {
+      const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+      const output = [];
+      let joined = 0;
+      const loneWord = /^[\p{Lu}][\p{L}\p{M}'’-]{1,39}$/u;
+      const firstAndClass = /^(\s*\d{1,4}\s*[.)-]?\s+)([\p{Lu}][\p{L}\p{M}'’-]{1,39})(\s+)(\d{1,2}\p{Lu}(?:\/\d{1,2}\p{Lu})?)([\s\S]*)$/u;
+      for (let i = 0; i < lines.length; i++) {
+        // Discard stray OCR bullets between a row number and the name.
+        const line = lines[i].replace(/^(\s*\d{1,4}\s+)[·•*]\s+(?=\p{Lu})/u, '$1');
+        const match = line.match(firstAndClass);
+        const next = lines[i + 1]?.trim() || '';
+        if (match && loneWord.test(next) &&
+            extractFromLine(line).length === 0 &&
+            !/[\p{L}\p{M}]/u.test(match[5])) {
+          output.push(match[1] + match[2] + ' ' + next + ' ' + match[4] + match[5]);
+          i++;
+          joined++;
+        } else {
+          output.push(line);
+        }
+      }
+      return { text: output.join('\n'), joined };
+    }
+
+    function unresolvedOcrRosterRows(text) {
+      return String(text || '').split(/\r?\n/).filter(line =>
+        /\b\d{1,2}\p{Lu}\b/u.test(line) &&
+        /^\s*\d{1,4}\s*[.)-]?\s+/.test(line) &&
+        extractFromLine(line).length === 0
+      ).length;
+    }
+
     function ocrResult(result) {
-      const text = typeof result?.data?.text === 'string' ? result.data.text : '';
-      const confidence = Number.isFinite(result?.data?.confidence)
-        ? result.data.confidence : 0;
-      return { text, names: cleanPastedNames(text), confidence };
+      const data = result?.data || {};
+      const originalText = typeof data.text === 'string' ? data.text : '';
+      const positioned = positionedOcrText(data);
+      let best = null;
+      for (const variant of positioned ? [originalText, positioned] : [originalText]) {
+        const fixed = repairWrappedRosterRows(variant);
+        const names = cleanPastedNames(fixed.text);
+        if (!best || names.length > best.names.length ||
+            (names.length === best.names.length && fixed.joined > best.joined)) {
+          best = { text: fixed.text, names, joined: fixed.joined };
+        }
+      }
+      const confidence = Number.isFinite(data.confidence) ? data.confidence : 0;
+      return {
+        ...(best || { text: originalText, names: [], joined: 0 }),
+        confidence,
+        unresolved: unresolvedOcrRosterRows(best?.text || originalText)
+      };
     }
 
     function bestOcrResult(first, second) {
@@ -1327,11 +1443,14 @@
           prepared.height = 0;
         }
       }
-      if (first.names.length && first.confidence >= 73) return first.text;
+      // Global OCR confidence alone hides missing table rows.
+      if (first.names.length && first.confidence >= 73 && first.unresolved === 0)
+        return first.text;
       onRetry();
       try {
         await worker.setParameters({
-          tessedit_pageseg_mode: String(window.Tesseract.PSM?.SPARSE_TEXT ?? '11'),
+          // Block segmentation often restores roster rows split by sparse OCR.
+          tessedit_pageseg_mode: String(window.Tesseract.PSM?.SINGLE_BLOCK ?? '6'),
           preserve_interword_spaces: '1'
         });
         const second = ocrResult(await worker.recognize(blob, { rotateAuto: true }));
