@@ -37,6 +37,7 @@
     h1 { font-size: 24px; font-weight: 600; margin: 0; }
     label { display: block; margin-bottom: 8px; }
     input[type="file"] { display: block; width: 100%; max-width: 100%; font: inherit; }
+    input[type="file"][hidden] { display: none; }
     select, button, textarea { font: inherit; color: inherit; background: #fff; border: 1px solid #aaa; border-radius: 0; }
     select { padding: 4px 6px; }
     button { cursor: pointer; padding: 6px 12px; }
@@ -222,6 +223,7 @@
         pasteLabel: 'Or paste text',
         pastePlaceholder: 'Paste text, paste a screenshot, or drop a file here',
         inputLabel: 'Name list input',
+        chooseFile: 'Choose file',
         dropHint: 'PDF · image · text · drag & drop · Ctrl+V',
         pasteClipboard: 'Paste',
         invalidDrop: 'Choose a PDF, image, or text file. For multiple files, select images only.',
@@ -282,6 +284,7 @@
         pasteLabel: 'Tai liitä teksti',
         pastePlaceholder: 'Liitä teksti, kuvakaappaus tai pudota tiedosto tähän',
         inputLabel: 'Nimilistan syöttö',
+        chooseFile: 'Valitse tiedosto',
         dropHint: 'PDF · kuva · teksti · vedä ja pudota · Ctrl+V',
         pasteClipboard: 'Liitä',
         invalidDrop: 'Valitse PDF-, kuva- tai tekstitiedosto. Useita tiedostoja voi valita vain kuvista.',
@@ -563,7 +566,7 @@
       ui.hideMiddleButton.textContent = translate('hideMiddle');
       ui.pasteLabel.textContent = translate('pasteLabel');
       ui.sourceText.placeholder = translate('pastePlaceholder');
-      ui.chooseFile.textContent = translate('file');
+      ui.chooseFile.textContent = translate('chooseFile');
       ui.pasteImage.textContent = translate('pasteClipboard');
       ui.imageHint.textContent = translate('dropHint');
       ui.inputZone.setAttribute('aria-label', translate('inputLabel'));
@@ -1229,7 +1232,9 @@
       }
     });
     ui.inputZone.addEventListener('dragover', event => {
-      if (event.dataTransfer && Array.from(event.dataTransfer.types || []).includes('Files')) {
+      if (!event.dataTransfer) return;
+      const types = Array.from(event.dataTransfer.types || []);
+      if (types.includes('Files') || types.includes('text/plain')) {
         event.preventDefault();
         event.dataTransfer.dropEffect = documentProcessing ? 'none' : 'copy';
         if (!documentProcessing) ui.inputZone.classList.add('drag-over');
