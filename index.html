@@ -480,7 +480,9 @@
       'yhteensä', 'osallistujat', 'jäsenet', 'jäsen', 'työntekijä', 'asiakas',
       'taulukko', 'tiedot', 'yritys', 'kaupunki', 'koulu', 'yliopisto',
       'the', 'and', 'with', 'for', 'from', 'of', 'on', 'ja', 'tai', 'sekä', 'oy', 'ry',
-      'ltd', 'inc', 'ab', 'www', 'http', 'https'
+      'ltd', 'inc', 'ab', 'www', 'http', 'https', 'class', 'grade', 'score',
+      'scores', 'point', 'points', 'luokka', 'piste', 'pisteet',
+      'oppilas', 'student', 'students', 'tulos', 'tulokset'
     ]);
     const particles = new Set(['de', 'del', 'van', 'von', 'der', 'den', 'da', 'di', 'af', 'la', 'le']);
 
@@ -509,9 +511,23 @@
       return s;
     }
 
+
+    // Extract names from tabular rows where a class code (e.g. 3A) follows
+    // the name, optionally followed by arbitrarily many numeric columns.
+    function rosterCandidate(cell) {
+      const text = String(cell || '').normalize('NFC')
+        .replace(/[\u00a0\u2007\u202f]/g, ' ').trim()
+        .replace(/^\d{1,6}[.)-]?\s+/, '');
+      const direct = candidate(text);
+      if (direct) return direct;
+      const match = text.match(/^(.+?)\s+\d{1,2}\p{Lu}(?:\/\d{1,2}\p{Lu})?(?=$|[\s;,|\t])/u);
+      return match ? candidate(match[1]) : null;
+    }
+
     function extractFromLine(line) {
       const pieces = line.trim().split(/\t|[;|]|\s{3,}/).map(s => s.trim()).filter(Boolean);
-      const found = pieces.map(candidate).filter(Boolean);
+      if (pieces.some(part => /^(?:name|full name|first name|last name|surname|given name|nimi|etunimi|sukunimi)$/iu.test(part))) return [];
+      const found = pieces.map(rosterCandidate).filter(Boolean);
       if (found.length) return found;
       // Names split across two adjacent table cells, even if other cells
       // contain unrelated numbers or dates.
@@ -538,7 +554,7 @@
         }
         return names;
       }
-      const whole = candidate(line);
+      const whole = rosterCandidate(line);
       return whole ? [whole] : [];
     }
 
@@ -579,7 +595,7 @@
           .replace(/^[\s•·*#-]*/, '')
           .replace(/^\d{1,6}[\s.)-]+/, '')
           .replace(/[ \t]+/g, ' ').trim();
-        return candidate(text.split(' ').map(normalizeWord).join(' '));
+        return rosterCandidate(text.split(' ').map(normalizeWord).join(' '));
       };
       const single = raw => {
         const word = raw.trim();
@@ -629,9 +645,11 @@
               found.push(exact);
               continue;
             }
-            const beforeNumber = cell.split(/\s+(?=\d{1,6}(?:[./-]\d+)*\b)/u)[0];
-            if (beforeNumber !== cell) {
-              const front = normalizedCandidate(beforeNumber);
+            // Strict score-only suffix; never strip timestamps, IDs or
+            // mixed numeric codes from headings.
+            const numericTail = cell.match(/^(.+?)\s+\d+(?:[.,]\d+)?(?:\s+\d+(?:[.,]\d+)?)*$/u);
+            if (numericTail && /\p{Ll}/u.test(numericTail[1])) {
+              const front = normalizedCandidate(numericTail[1]);
               if (front) found.push(front);
             }
             const comma = cell.match(/^([\p{L}'’-]+),\s*([\p{L}'’-]+)$/u);
@@ -651,14 +669,8 @@
             }
           }
         }
-        if (!found.length && cells.length === 1) {
-          const withoutIndex = row.replace(/^\d{1,6}[.)-]?\s+/, '');
-          const prefix = withoutIndex.match(/^([\p{Lu}][\p{L}\p{M}'’.-]+(?:\s+[\p{Lu}][\p{L}\p{M}'’.-]+){1,3})(?=\s+[\d(,;]|$)/u);
-          if (prefix) {
-            const value = normalizedCandidate(prefix[1]);
-            if (value) found.push(value);
-          }
-        }
+        // Do not guess from arbitrary capitalized prefixes before a number:
+        // headings followed by dates/times otherwise become false names.
         found.forEach(add);
       }
       return names;
