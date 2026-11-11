@@ -201,6 +201,8 @@
           text_items: safeNumber(page.text_items),
           text_characters: safeNumber(page.text_characters),
           text_lines: safeNumber(page.text_lines),
+          fragment_joins: safeNumber(page.fragment_joins),
+          fragment_separations: safeNumber(page.fragment_separations),
           ocr_attempted: page.ocr_attempted === true,
           ocr_lines: safeNumber(page.ocr_lines),
           completed: page.completed === true
@@ -287,15 +289,17 @@
       return promise;
     }
 
-    // PDF.js gives text as positioned fragments, not necessarily as complete lines.
-    function pdfLines(items) {
+    // PDF.js may return letters or syllables rather than whole words.
+    // Join adjacent fragments without spaces; preserve actual PDF whitespace.
+    function pdfLines(items, stats = null) {
       const positioned = items
         .filter(item => typeof item.str === 'string' && item.str.trim())
         .map(item => ({
-          text: item.str.replace(/\s+/g, ' ').trim(),
+          text: item.str.replace(/\s+/g, ' '),
           x: item.transform ? item.transform[4] : 0,
           y: item.transform ? item.transform[5] : 0,
-          width: Number(item.width) || 0
+          width: Number(item.width) || 0,
+          fontSize: Math.abs(Number(item.transform && item.transform[3])) || Number(item.height) || 10
         }))
         .sort((a, b) => b.y - a.y || a.x - b.x);
 
@@ -309,20 +313,37 @@
         }
       }
 
-      return rows.map(row => {
+      let mergedFragments = 0;
+      let separatedFragments = 0;
+      const lines = rows.map(row => {
         row.items.sort((a, b) => a.x - b.x);
         let line = '';
         let previous = null;
         for (const item of row.items) {
           if (previous) {
             const gap = item.x - previous.x - previous.width;
-            line += gap > 22 ? '\t' : ' ';
+            const wordGap = Math.max(1.2, Math.min(previous.fontSize, item.fontSize) * 0.18);
+            const explicitSpace = /\s$/.test(line) || /^\s/.test(item.text);
+            if (gap > 22) {
+              line += '\t';
+              separatedFragments++;
+            } else if (gap > wordGap) {
+              if (!explicitSpace) line += ' ';
+              separatedFragments++;
+            } else if (!explicitSpace) {
+              mergedFragments++;
+            }
           }
           line += item.text;
           previous = item;
         }
-        return line.trim();
+        return line.trim().replace(/[ ]{2,}/g, ' ');
       }).filter(Boolean);
+      if (stats) {
+        stats.fragment_joins = mergedFragments;
+        stats.fragment_separations = separatedFragments;
+      }
+      return lines;
     }
 
     async function getOcrWorker() {
@@ -399,6 +420,18 @@
       const pieces = line.trim().split(/\t|[;|]|\s{3,}/).map(s => s.trim()).filter(Boolean);
       const found = pieces.map(candidate).filter(Boolean);
       if (found.length) return found;
+      // Names split across two adjacent table cells, even if other cells
+      // contain unrelated numbers or dates.
+      const paired = [];
+      for (let i = 0; i + 1 < pieces.length; i++) {
+        if (/\s/.test(pieces[i]) || /\s/.test(pieces[i + 1])) continue;
+        const person = candidate(pieces[i] + ' ' + pieces[i + 1]);
+        if (person) {
+          paired.push(person);
+          i++;
+        }
+      }
+      if (paired.length) return paired;
       const singleWords = pieces
         .filter(s => !/^\d+[.)-]?$/.test(s))
         .map(s => s.replace(/^\d{1,5}[.)-]?\s+/, ''));
@@ -447,7 +480,7 @@
           setStatus('reading', number, pdf.numPages);
           const pageDiagnostic = {
             page: number, text_items: 0, text_characters: 0,
-            text_lines: 0, ocr_attempted: false, ocr_lines: null, completed: false
+            text_lines: 0, fragment_joins: 0, fragment_separations: 0, ocr_attempted: false, ocr_lines: null, completed: false
           };
           diagnostics.pages.push(pageDiagnostic);
           diagnostics.stage = 'page_load';
@@ -456,7 +489,7 @@
             diagnostics.stage = 'text_read';
             const text = await page.getTextContent();
             pageDiagnostic.text_items = text.items.length;
-            let pageLines = pdfLines(text.items);
+            let pageLines = pdfLines(text.items, pageDiagnostic);
             pageDiagnostic.text_lines = pageLines.length;
             pageDiagnostic.text_characters = pageLines.reduce((total, line) => total + line.length, 0);
             // Preserve the original OCR trigger and name-extraction method.
