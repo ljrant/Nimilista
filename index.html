@@ -58,6 +58,41 @@
     #debug-report { min-height: 290px; font-family: monospace; font-size: 13px; }
     #debug-output { margin-top: 22px; }
     #debug-status { min-height: 22px; font-size: 14px; color: #555; }
+  
+  /* Compact layout */
+  main { padding: 16px 14px 20px; }
+  header { gap: 12px; margin-bottom: 12px; }
+  .header-tools { gap: 8px; }
+  h1 { font-size: 21px; }
+  .gear { padding: 3px 5px; font-size: 19px; }
+  .language-toggle { border: 0; padding: 5px 2px; background: none; color: #777; font-size: 12px; letter-spacing: .2px; white-space: nowrap; }
+  .language-toggle .active { color: #111; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+  .language-toggle .lang-sep { color: #aaa; padding: 0 3px; }
+  #settings-panel { padding: 8px 0 10px; margin: -3px 0 12px; }
+  .settings-check { margin-top: 7px; gap: 7px; }
+  .settings-note { margin: 5px 0 0; font-size: 12px; }
+  .input-zone { margin-top: 0; padding: 3px 8px 6px; }
+  .input-zone #source-text { min-height: 72px; height: 92px; padding: 6px 1px; }
+  .input-actions { gap: 6px; padding: 4px 1px 0; }
+  .input-actions .input-tools { gap: 10px; }
+  .input-tools button { padding: 2px 0; }
+  .input-actions #clean-button { padding: 4px 9px; }
+  #status { min-height: 0; margin: 7px 0 9px; font-size: 13px; }
+  #status:empty { margin: 0; }
+  #results { margin-top: 12px; }
+  .name-heading { gap: 5px 10px; margin-bottom: 5px; }
+  #names-label { margin-bottom: 0; }
+  .name-options { gap: 5px 10px; }
+  textarea { min-height: 96px; padding: 7px; line-height: 1.45; }
+  .exports { gap: 5px; margin-top: 6px; }
+  .note { margin: 8px 0 0; font-size: 12px; }
+  #open-debug { margin-top: 9px; }
+  #debug-view h2 { font-size: 17px; margin: 9px 0 6px; }
+  #debug-source { min-height: 112px; height: 130px; }
+  #debug-report { min-height: 150px; height: 220px; font-size: 12px; }
+  #debug-output { margin-top: 10px; }
+  #debug-status { min-height: 0; margin: 7px 0 0; font-size: 13px; }
+  #debug-status:empty, #diagnostics-status:empty { display: none; }
   </style>
 </head>
 <body>
@@ -65,13 +100,7 @@
     <header>
       <h1>Nimilista</h1>
       <div class="header-tools">
-        <label for="language">
-          <span class="sr-only">Language / Kieli</span>
-          <select id="language" aria-label="Language / Kieli">
-            <option value="en">English</option>
-            <option value="fi">Suomi</option>
-          </select>
-        </label>
+        <button type="button" id="language" class="language-toggle" value="en" aria-label="Switch to Finnish" title="Switch to Finnish"><span id="lang-fi">FI</span><span class="lang-sep" aria-hidden="true">/</span><span id="lang-en" class="active">EN</span></button>
         <button type="button" class="gear" id="open-settings" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-panel"><span aria-hidden="true">⚙︎</span></button>
       </div>
     </header>
@@ -92,7 +121,7 @@
       <label for="pdf" id="file-label" class="sr-only">Choose file</label>
       <input id="pdf" type="file" accept=".pdf,application/pdf,image/png,image/jpeg,image/webp,image/bmp,.txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" multiple hidden>
       <label for="source-text" id="paste-label" class="sr-only">Paste text or an image</label>
-      <textarea id="source-text" spellcheck="false" placeholder="Paste text, paste a screenshot, or drop a file here"></textarea>
+      <textarea id="source-text" spellcheck="false" placeholder="Paste text, screenshot or drop a file…"></textarea>
       <div class="input-actions">
         <div class="input-tools">
           <button type="button" id="choose-file">Choose file</button>
@@ -100,8 +129,7 @@
         </div>
         <button type="button" id="clean-button">Extract names</button>
       </div>
-      <p class="drop-hint" id="image-hint">PDF · image · text · drag & drop · Ctrl+V</p>
-    </section>
+      </section>
     <p id="status" role="status" aria-live="polite"></p>
     <section id="diagnostics-section" hidden>
       <button type="button" id="diagnostics-copy">Copy diagnostics</button>
@@ -127,14 +155,13 @@
         <button type="button" data-export="copy" id="copy-button">Copy</button>
       </div>
     </section>
-    <p class="note" id="note">Your PDF stays in your browser. Check the names before exporting.</p>
     <button type="button" class="quiet-link" id="open-debug">Debug</button>
     </section>
 
     <section id="debug-view" hidden>
       <button type="button" class="quiet-link" id="close-debug">Back</button>
       <h2 id="debug-title">Text diagnostics</h2>
-      <p class="note" id="debug-note">The report replaces all words and numbers with categories. Nothing is uploaded. Review the report before sharing: structural patterns may also be sensitive.</p>
+      <p class="note" id="debug-note">Words and numbers are masked locally. Review before sharing.</p>
       <label for="debug-source" id="debug-label">Paste text to diagnose</label>
       <textarea id="debug-source" spellcheck="false" placeholder="Paste text here"></textarea>
       <div class="exports"><button type="button" id="debug-generate">Generate sanitized report</button></div>
@@ -164,19 +191,19 @@
 
     const ui = {
       language: document.getElementById('language'),
+      langFi: document.getElementById('lang-fi'),
+      langEn: document.getElementById('lang-en'),
       file: document.getElementById('pdf'),
       fileLabel: document.getElementById('file-label'),
       status: document.getElementById('status'),
       results: document.getElementById('results'),
       namesLabel: document.getElementById('names-label'),
       names: document.getElementById('names'),
-      note: document.getElementById('note'),
       copyButton: document.getElementById('copy-button'),
       sourceText: document.getElementById('source-text'),
       inputZone: document.getElementById('input-zone'),
       chooseFile: document.getElementById('choose-file'),
       pasteImage: document.getElementById('paste-image'),
-      imageHint: document.getElementById('image-hint'),
       pasteLabel: document.getElementById('paste-label'),
       cleanButton: document.getElementById('clean-button'),
       diagnosticsSection: document.getElementById('diagnostics-section'),
@@ -217,11 +244,11 @@
         settings: 'Settings',
         settingsClose: 'Close',
         filterProducts: 'Filter known product names',
-        settingsNote: 'Common software and services are removed from the result. Other options can be added here later.',
+        settingsNote: 'Local processing · Filters common service names.',
         lastFirst: 'Last name first',
         hideMiddle: 'Hide middle names',
         pasteLabel: 'Or paste text',
-        pastePlaceholder: 'Paste text, paste a screenshot, or drop a file here',
+        pastePlaceholder: 'Paste text, screenshot or drop a file…',
         inputLabel: 'Name list input',
         chooseFile: 'Choose file',
         dropHint: 'PDF · image · text · drag & drop · Ctrl+V',
@@ -253,13 +280,13 @@
         copied: 'Copied to clipboard.',
         copyError: 'Could not copy to clipboard.',
         diagnosticsCopy: 'Copy diagnostics',
-        diagnosticsNote: 'Only technical counts, processing stages and error categories. No names, PDF text or filename. You can inspect what you paste before sharing.',
+        diagnosticsNote: 'Counts only. No names or PDF text.',
         diagnosticsCopied: 'Diagnostics copied.',
         diagnosticsCopyError: 'Could not copy diagnostics. Try another browser.',
         debugLink: 'Debug',
         debugBack: 'Back',
         debugTitle: 'Text diagnostics',
-        debugNote: 'Paste private text to generate a structural report. All words and numbers are replaced by categories. Nothing is uploaded. Review before sharing: structural patterns may still be sensitive.',
+        debugNote: 'Words and numbers are masked locally. Review before sharing.',
         debugLabel: 'Paste text to diagnose',
         debugPlaceholder: 'Paste text here',
         debugGenerate: 'Generate sanitized report',
@@ -278,11 +305,11 @@
         settings: 'Asetukset',
         settingsClose: 'Sulje',
         filterProducts: 'Poista tunnetut tuotenimet',
-        settingsNote: 'Yleiset ohjelmistot ja palvelut poistetaan nimilistasta. Muita asetuksia voi lisätä tänne myöhemmin.',
+        settingsNote: 'Käsittely selaimessa · Suodattaa yleisiä palvelunimiä.',
         lastFirst: 'Sukunimi ensin',
         hideMiddle: 'Piilota välinimet',
         pasteLabel: 'Tai liitä teksti',
-        pastePlaceholder: 'Liitä teksti, kuvakaappaus tai pudota tiedosto tähän',
+        pastePlaceholder: 'Liitä teksti, kuva tai pudota tiedosto…',
         inputLabel: 'Nimilistan syöttö',
         chooseFile: 'Valitse tiedosto',
         dropHint: 'PDF · kuva · teksti · vedä ja pudota · Ctrl+V',
@@ -314,13 +341,13 @@
         copied: 'Kopioitu leikepöydälle.',
         copyError: 'Kopiointi epäonnistui.',
         diagnosticsCopy: 'Kopioi diagnostiikka',
-        diagnosticsNote: 'Vain tekniset lukumäärät, käsittelyvaiheet ja virheluokat. Ei nimiä, PDF-tekstiä tai tiedostonimeä. Voit tarkistaa liitettävän raportin ennen jakamista.',
+        diagnosticsNote: 'Vain teknisiä tietoja. Ei nimiä tai PDF-tekstiä.',
         diagnosticsCopied: 'Diagnostiikka kopioitu.',
         diagnosticsCopyError: 'Diagnostiikan kopiointi epäonnistui. Kokeile toista selainta.',
         debugLink: 'Vianmääritys',
         debugBack: 'Takaisin',
         debugTitle: 'Tekstin diagnostiikka',
-        debugNote: 'Liitä yksityinen teksti rakenteellisen raportin luomista varten. Kaikki sanat ja numerot korvataan luokilla. Mitään ei lähetetä palvelimelle. Tarkista raportti ennen jakamista: myös rakenne voi sisältää arkaluonteisia piirteitä.',
+        debugNote: 'Sanat ja numerot peitetään selaimessa. Tarkista ennen jakamista.',
         debugLabel: 'Liitä tutkittava teksti',
         debugPlaceholder: 'Liitä teksti tähän',
         debugGenerate: 'Luo anonymisoitu raportti',
@@ -530,6 +557,7 @@
         .filter(name => !filterProductsEnabled || !isKnownProductName(name))
         .map(name => ({ source: name, displayed: formatPersonName(name) }));
       ui.names.value = lastRenderedRows.map(row => row.displayed).join('\n');
+      ui.names.style.height = Math.min(330, Math.max(96, lastRenderedRows.length * 23 + 20)) + 'px';
       ui.lastFirstButton.setAttribute('aria-pressed', String(lastNameFirst));
       ui.hideMiddleButton.setAttribute('aria-pressed', String(hideMiddleNames));
       updateCount();
@@ -553,8 +581,13 @@
 
     function localize() {
       document.documentElement.lang = ui.language.value;
+      const finnish = ui.language.value === 'fi';
+      ui.langFi.classList.toggle('active', finnish);
+      ui.langEn.classList.toggle('active', !finnish);
+      const switchLabel = finnish ? 'Vaihda englanniksi' : 'Switch to Finnish';
+      ui.language.setAttribute('aria-label', switchLabel);
+      ui.language.title = switchLabel;
       ui.fileLabel.textContent = translate('file');
-      ui.note.textContent = translate('note');
       ui.copyButton.textContent = translate('copy');
       ui.settingsButton.setAttribute('aria-label', translate('settings'));
       ui.settingsButton.title = translate('settings');
@@ -568,7 +601,6 @@
       ui.sourceText.placeholder = translate('pastePlaceholder');
       ui.chooseFile.textContent = translate('chooseFile');
       ui.pasteImage.textContent = translate('pasteClipboard');
-      ui.imageHint.textContent = translate('dropHint');
       ui.inputZone.setAttribute('aria-label', translate('inputLabel'));
       ui.sourceText.setAttribute('aria-label', translate('pasteLabel'));
       ui.cleanButton.textContent = translate('cleanButton');
@@ -1378,7 +1410,10 @@
       renderNames();
     });
     ui.diagnosticsCopy.addEventListener('click', copyDiagnostics);
-    ui.language.addEventListener('change', localize);
+    ui.language.addEventListener('click', () => {
+      ui.language.value = ui.language.value === 'en' ? 'fi' : 'en';
+      localize();
+    });
     ui.names.addEventListener('input', updateCount);
     document.querySelectorAll('[data-export]').forEach(button => {
       button.addEventListener('click', () => exportNames(button.dataset.export));
