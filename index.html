@@ -45,6 +45,9 @@
     <label for="pdf" id="file-label">PDF file</label>
     <input id="pdf" type="file" accept=".pdf,application/pdf">
     <p id="status" role="status" aria-live="polite"></p>
+    <label for="source-text" id="paste-label">Or paste text</label>
+    <textarea id="source-text" rows="7" spellcheck="false" placeholder="Paste copied text here"></textarea>
+    <div class="exports"><button type="button" id="clean-button">Clean name list</button></div>
     <section id="diagnostics-section" hidden>
       <button type="button" id="diagnostics-copy">Copy diagnostics</button>
       <p class="note" id="diagnostics-note">Technical counts and error categories only. No names, PDF text or filename.</p>
@@ -91,6 +94,9 @@
       names: document.getElementById('names'),
       note: document.getElementById('note'),
       copyButton: document.getElementById('copy-button'),
+      sourceText: document.getElementById('source-text'),
+      pasteLabel: document.getElementById('paste-label'),
+      cleanButton: document.getElementById('clean-button'),
       diagnosticsSection: document.getElementById('diagnostics-section'),
       diagnosticsCopy: document.getElementById('diagnostics-copy'),
       diagnosticsNote: document.getElementById('diagnostics-note'),
@@ -103,6 +109,11 @@
         names: 'Names',
         note: 'Your PDF stays in your browser. Check the names before exporting.',
         copy: 'Copy',
+        pasteLabel: 'Or paste text',
+        pastePlaceholder: 'Paste copied text here',
+        cleanButton: 'Clean name list',
+        pasteEmpty: 'Paste some text first.',
+        cleanReady: (count) => count ? 'Found ' + count + ' names. Check the list before exporting.' : 'No names recognized. Check the source layout or edit the result manually.',
         empty: '',
         reading: (page, total) => 'Reading page ' + page + ' / ' + total + '…',
         ocr: (page, total) => 'Reading scanned page ' + page + ' / ' + total + ' (OCR)…',
@@ -122,6 +133,11 @@
         names: 'Nimet',
         note: 'PDF-tiedosto käsitellään selaimessasi. Tarkista nimet ennen vientiä.',
         copy: 'Kopioi',
+        pasteLabel: 'Tai liitä teksti',
+        pastePlaceholder: 'Liitä kopioitu teksti tähän',
+        cleanButton: 'Siisti nimilista',
+        pasteEmpty: 'Liitä ensin tekstiä.',
+        cleanReady: (count) => count ? 'Löytyi ' + count + ' nimeä. Tarkista lista ennen vientiä.' : 'Nimiä ei tunnistettu. Tarkista tekstin rakenne tai muokkaa tuloslistaa itse.',
         empty: '',
         reading: (page, total) => 'Luetaan sivua ' + page + ' / ' + total + '…',
         ocr: (page, total) => 'Luetaan skannattua sivua ' + page + ' / ' + total + ' (OCR)…',
@@ -268,6 +284,10 @@
       ui.fileLabel.textContent = translate('file');
       ui.note.textContent = translate('note');
       ui.copyButton.textContent = translate('copy');
+      ui.pasteLabel.textContent = translate('pasteLabel');
+      ui.sourceText.placeholder = translate('pastePlaceholder');
+      ui.sourceText.setAttribute('aria-label', translate('pasteLabel'));
+      ui.cleanButton.textContent = translate('cleanButton');
       ui.diagnosticsCopy.textContent = translate('diagnosticsCopy');
       ui.diagnosticsNote.textContent = translate('diagnosticsNote');
       ui.diagnosticsStatus.textContent = diagnosticsFeedback ? translate(diagnosticsFeedback) : '';
@@ -464,6 +484,113 @@
       return names;
     }
 
+
+    // Clean pasted PDF/text tables locally. This never sends the input anywhere.
+    function cleanPastedNames(source) {
+      const names = [];
+      const seen = new Set();
+      const add = raw => {
+        const clean = raw.normalize('NFC').trim().replace(/\s+/g, ' ');
+        const key = clean.toLocaleLowerCase('fi');
+        if (clean && !seen.has(key)) {
+          seen.add(key);
+          names.push(clean);
+        }
+      };
+      const normalizeWord = word =>
+        /^[\p{Lu}\p{M}'’.-]+$/u.test(word) && /\p{Lu}{2,}/u.test(word)
+          ? word.charAt(0) + word.slice(1).toLocaleLowerCase('fi') : word;
+      const normalizedCandidate = raw => {
+        const text = String(raw || '').normalize('NFC')
+          .replace(/[\u00a0\u2007\u202f]/g, ' ')
+          .replace(/^[\s•·*#-]*/, '')
+          .replace(/^\d{1,6}[\s.)-]+/, '')
+          .replace(/[ \t]+/g, ' ').trim();
+        return candidate(text.split(' ').map(normalizeWord).join(' '));
+      };
+      const single = raw => {
+        const word = raw.trim();
+        return !/\s/.test(word) &&
+          /^[\p{Lu}][\p{L}\p{M}'’.-]+$/u.test(word) &&
+          !excluded.has(word.toLocaleLowerCase('fi'));
+      };
+      const headerType = cell => {
+        const label = cell.trim().toLocaleLowerCase('fi').replace(/[.:*]/g, '').replace(/\s+/g, ' ');
+        if (['etunimi', 'etunimet', 'first name', 'given name'].includes(label)) return 'first';
+        if (['sukunimi', 'last name', 'surname', 'family name'].includes(label)) return 'last';
+        if (['nimi', 'koko nimi', 'name', 'full name'].includes(label)) return 'full';
+        return null;
+      };
+      let header = null;
+      const lines = source.normalize('NFC').replace(/\r\n?/g, '\n').split('\n');
+      for (const originalLine of lines) {
+        const row = originalLine.replace(/[\u00a0\u2007\u202f]/g, ' ').trim();
+        if (!row || row.length > 1200) continue;
+        const cells = row.split(/\t|[;|]|\s{3,}/).map(c => c.trim()).filter(Boolean);
+        if (!cells.length) continue;
+        const headings = cells.map(headerType);
+        if ((headings.includes('first') && headings.includes('last')) ||
+             (headings.includes('full') && cells.length > 1)) {
+          header = headings;
+          continue;
+        }
+        if (header && cells.length === header.length) {
+          const first = header.indexOf('first');
+          const last = header.indexOf('last');
+          const full = header.indexOf('full');
+          const value = full >= 0 ? normalizedCandidate(cells[full]) :
+            (first >= 0 && last >= 0
+              ? normalizedCandidate(cells[first] + ' ' + cells[last]) : null);
+          if (value) {
+            add(value);
+            continue;
+          }
+        }
+        let found = [];
+        const whole = normalizedCandidate(row);
+        if (whole) found.push(whole);
+        if (!found.length) {
+          for (const cell of cells) {
+            const exact = normalizedCandidate(cell);
+            if (exact) {
+              found.push(exact);
+              continue;
+            }
+            const beforeNumber = cell.split(/\s+(?=\d{1,6}(?:[./-]\d+)*\b)/u)[0];
+            if (beforeNumber !== cell) {
+              const front = normalizedCandidate(beforeNumber);
+              if (front) found.push(front);
+            }
+            const comma = cell.match(/^([\p{L}'’-]+),\s*([\p{L}'’-]+)$/u);
+            if (comma) {
+              const swapped = normalizedCandidate(comma[2] + ' ' + comma[1]);
+              if (swapped) found.push(swapped);
+            }
+          }
+        }
+        if (!found.length) {
+          for (let i = 0; i + 1 < cells.length; i++) {
+            if (!single(cells[i]) || !single(cells[i + 1])) continue;
+            const pair = normalizedCandidate(cells[i] + ' ' + cells[i + 1]);
+            if (pair) {
+              found.push(pair);
+              i++;
+            }
+          }
+        }
+        if (!found.length && cells.length === 1) {
+          const withoutIndex = row.replace(/^\d{1,6}[.)-]?\s+/, '');
+          const prefix = withoutIndex.match(/^([\p{Lu}][\p{L}\p{M}'’.-]+(?:\s+[\p{Lu}][\p{L}\p{M}'’.-]+){1,3})(?=\s+[\d(,;]|$)/u);
+          if (prefix) {
+            const value = normalizedCandidate(prefix[1]);
+            if (value) found.push(value);
+          }
+        }
+        found.forEach(add);
+      }
+      return names;
+    }
+
     async function extractPdf(file, runId) {
       diagnostics.stage = 'library_load';
       const pdfjsLib = await getPdfLibrary();
@@ -625,6 +752,21 @@
       }
     });
 
+    ui.cleanButton.addEventListener('click', () => {
+      if (!ui.sourceText.value.trim()) {
+        setStatus('pasteEmpty');
+        return;
+      }
+      ++activeRun;
+      diagnostics = null;
+      ui.diagnosticsSection.hidden = true;
+      ui.diagnosticsStatus.textContent = '';
+      const names = cleanPastedNames(ui.sourceText.value);
+      ui.names.value = names.join('\n');
+      updateCount();
+      ui.results.hidden = false;
+      setStatus('cleanReady', names.length);
+    });
     ui.diagnosticsCopy.addEventListener('click', copyDiagnostics);
     ui.language.addEventListener('change', localize);
     ui.names.addEventListener('input', updateCount);
