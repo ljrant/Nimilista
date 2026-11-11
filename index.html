@@ -62,10 +62,36 @@
   </main>
 
   <script type="module">
-    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.min.mjs';
-
-    pdfjsLib.GlobalWorkerOptions.workerSrc =
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.worker.min.mjs';
+    // Load PDF.js when a file is chosen. A second CDN is available if the first is blocked.
+    const pdfLibraries = [
+      ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.min.mjs',
+       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.5.438/pdf.worker.min.mjs'],
+      ['https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.min.mjs',
+       'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.5.438/build/pdf.worker.min.mjs']
+    ];
+    let pdfjsLoad = null;
+    async function getPdfLibrary() {
+      if (!pdfjsLoad) {
+        pdfjsLoad = (async () => {
+          for (const [script, worker] of pdfLibraries) {
+            try {
+              const pdfjsLib = await import(script);
+              pdfjsLib.GlobalWorkerOptions.workerSrc = worker;
+              return pdfjsLib;
+            } catch (error) {
+              // Try the next mirror without transmitting the selected PDF.
+            }
+          }
+          throw Object.assign(new Error('PDF library unavailable'), { code: 'PDF_LIBRARY' });
+        })();
+      }
+      try {
+        return await pdfjsLoad;
+      } catch (error) {
+        pdfjsLoad = null;
+        throw error;
+      }
+    }
 
     const ui = {
       language: document.getElementById('language'),
@@ -89,7 +115,11 @@
         reading: (page, total) => 'Reading page ' + page + ' / ' + total + '…',
         ocr: (page, total) => 'Reading scanned page ' + page + ' / ' + total + ' (OCR)…',
         ready: (count) => count ? 'Done. You can edit the list before exporting.' : 'No names found. Try a clearer PDF.',
-        error: 'Could not read this PDF. It may be damaged, password-protected, or an external library may be unavailable.',
+        error: 'This PDF could not be processed. Try opening and saving a new copy of the PDF on your computer.',
+        password: 'This PDF is password-protected. Open it in your PDF reader and save an unlocked copy locally, if permitted.',
+        badPdf: 'The PDF appears damaged or unsupported. Try opening it in a PDF reader and saving a new PDF copy.',
+        library: 'The PDF reader library could not load. Check your internet connection or try a different browser.',
+        ocrError: 'This page needs OCR, but OCR could not start. Check your connection or disable content blockers for this site.',
         invalid: 'Please select a PDF file.',
         exportError: 'Could not create the export file.',
         copied: 'Copied to clipboard.',
@@ -104,7 +134,11 @@
         reading: (page, total) => 'Luetaan sivua ' + page + ' / ' + total + '…',
         ocr: (page, total) => 'Luetaan skannattua sivua ' + page + ' / ' + total + ' (OCR)…',
         ready: (count) => count ? 'Valmis. Voit muokata listaa ennen vientiä.' : 'Nimiä ei löytynyt. Kokeile selkeämpää PDF-tiedostoa.',
-        error: 'PDF-tiedostoa ei voitu lukea. Se voi olla vioittunut, salasanasuojattu tai tarvittavaa kirjastoa ei saatu ladattua.',
+        error: 'PDF-tiedostoa ei voitu käsitellä. Avaa tiedosto PDF-lukijassa ja tallenna siitä uusi kopio tietokoneellesi.',
+        password: 'PDF-tiedosto on salasanasuojattu. Avaa se PDF-lukijassa ja tallenna suojaamaton kopio paikallisesti, jos se on sallittua.',
+        badPdf: 'PDF-tiedosto saattaa olla vioittunut tai yhteensopimaton. Kokeile tallentaa siitä uusi PDF-kopio.',
+        library: 'PDF-lukukirjastoa ei saatu ladattua. Tarkista verkkoyhteys tai kokeile toista selainta.',
+        ocrError: 'Sivu vaatii tekstintunnistuksen (OCR), mutta sitä ei voitu käynnistää. Tarkista verkkoyhteys tai tämän sivuston sisällönesto.',
         invalid: 'Valitse PDF-tiedosto.',
         exportError: 'Vientitiedostoa ei voitu luoda.',
         copied: 'Kopioitu leikepöydälle.',
@@ -126,7 +160,7 @@
     function setStatus(key, ...args) {
       currentStatus = key;
       statusArgs = args;
-      ui.status.classList.toggle('error', ['error', 'invalid', 'exportError', 'copyError'].includes(key));
+      ui.status.classList.toggle('error', ['error', 'password', 'badPdf', 'library', 'ocrError', 'invalid', 'exportError', 'copyError'].includes(key));
       ui.status.textContent = translate(key, ...args);
     }
 
@@ -201,9 +235,14 @@
 
     async function getOcrWorker() {
       if (!ocrWorker) {
-        await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
-        // Tesseract downloads the Finnish and English language models only when needed.
-        ocrWorker = await window.Tesseract.createWorker(['eng', 'fin']);
+        try {
+          await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
+          // Language models are downloaded, but PDF pages stay on this device.
+          if (!window.Tesseract) throw new Error('OCR library not initialized');
+          ocrWorker = await window.Tesseract.createWorker(['eng', 'fin']);
+        } catch (error) {
+          throw Object.assign(new Error('OCR unavailable'), { code: 'OCR_LIBRARY' });
+        }
       }
       return ocrWorker;
     }
@@ -306,6 +345,7 @@
     }
 
     async function extractPdf(file, runId) {
+      const pdfjsLib = await getPdfLibrary();
       const pdf = await pdfjsLib.getDocument({
         data: new Uint8Array(await file.arrayBuffer()),
         isEvalSupported: false
@@ -316,20 +356,44 @@
           if (runId !== activeRun) return [];
           setStatus('reading', number, pdf.numPages);
           const page = await pdf.getPage(number);
-          const text = await page.getTextContent();
-          let pageLines = pdfLines(text.items);
-          // Scanned pages have little or no selectable text.
-          if (pageLines.join(' ').replace(/\s/g, '').length < 20) {
-            setStatus('ocr', number, pdf.numPages);
-            pageLines = await readScannedPage(page);
+          try {
+            let pageLines = [];
+            try {
+              const text = await page.getTextContent();
+              pageLines = pdfLines(text.items);
+            } catch (error) {
+              // Some PDFs can render but have a damaged or inaccessible text layer.
+            }
+
+            // A scanned document may contain a small header in its text layer.
+            // Try OCR whenever selectable text does not yield recognizable names.
+            if (extractNames(pageLines).length === 0) {
+              setStatus('ocr', number, pdf.numPages);
+              try {
+                const recognized = await readScannedPage(page);
+                if (recognized.length) pageLines = recognized;
+              } catch (error) {
+                if (error.code === 'OCR_LIBRARY') throw error;
+                throw Object.assign(new Error('OCR could not read page'), { code: 'OCR_LIBRARY' });
+              }
+            }
+            lines.push(...pageLines);
+          } finally {
+            page.cleanup();
           }
-          lines.push(...pageLines);
-          page.cleanup();
         }
       } finally {
         await pdf.destroy();
       }
       return extractNames(lines);
+    }
+
+    function classifyError(error) {
+      if (error.code === 'PDF_LIBRARY') return 'library';
+      if (error.code === 'OCR_LIBRARY') return 'ocrError';
+      if (error.name === 'PasswordException' || /password/i.test(error.message || '')) return 'password';
+      if (error.name === 'InvalidPDFException' || error.name === 'MissingPDFException') return 'badPdf';
+      return 'error';
     }
 
     function filename(extension) {
@@ -409,12 +473,12 @@
         ui.results.hidden = false;
         setStatus('ready', names.length);
       } catch (error) {
-        console.error(error);
-        setStatus('error');
+        // Do not log PDF contents, filenames or recognized names.
+        setStatus(classifyError(error));
       } finally {
         ui.file.disabled = false;
         if (ocrWorker) {
-          await ocrWorker.terminate();
+          try { await ocrWorker.terminate(); } catch (_) { /* Already stopped. */ }
           ocrWorker = null;
         }
       }
