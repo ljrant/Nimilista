@@ -27,6 +27,12 @@
     .exports { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .note { color: #666; font-size: 13px; margin-top: 32px; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .quiet-link { background: none; color: #666; border: 0; border-bottom: 1px solid #bbb; padding: 1px 0; font-size: 13px; }
+    #debug-view h2 { font-size: 18px; font-weight: 600; margin: 24px 0 16px; }
+    #debug-source { min-height: 180px; }
+    #debug-report { min-height: 290px; font-family: monospace; font-size: 13px; }
+    #debug-output { margin-top: 22px; }
+    #debug-status { min-height: 22px; font-size: 14px; color: #555; }
   </style>
 </head>
 <body>
@@ -42,6 +48,7 @@
       </label>
     </header>
 
+    <section id="normal-view">
     <label for="pdf" id="file-label">PDF file</label>
     <input id="pdf" type="file" accept=".pdf,application/pdf">
     <p id="status" role="status" aria-live="polite"></p>
@@ -67,6 +74,23 @@
       </div>
     </section>
     <p class="note" id="note">Your PDF stays in your browser. Check the names before exporting.</p>
+    <button type="button" class="quiet-link" id="open-debug">Debug</button>
+    </section>
+
+    <section id="debug-view" hidden>
+      <button type="button" class="quiet-link" id="close-debug">Back</button>
+      <h2 id="debug-title">Text diagnostics</h2>
+      <p class="note" id="debug-note">The report replaces all words and numbers with categories. Nothing is uploaded. Review the report before sharing: structural patterns may also be sensitive.</p>
+      <label for="debug-source" id="debug-label">Paste text to diagnose</label>
+      <textarea id="debug-source" spellcheck="false" placeholder="Paste text here"></textarea>
+      <div class="exports"><button type="button" id="debug-generate">Generate sanitized report</button></div>
+      <section id="debug-output" hidden>
+        <label for="debug-report" id="debug-output-label">Sanitized report (review before copying)</label>
+        <textarea id="debug-report" readonly spellcheck="false"></textarea>
+        <div class="exports"><button type="button" id="debug-copy">Copy sanitized report</button></div>
+      </section>
+      <p id="debug-status" role="status" aria-live="polite"></p>
+    </section>
   </main>
 
   <script type="module">
@@ -100,7 +124,21 @@
       diagnosticsSection: document.getElementById('diagnostics-section'),
       diagnosticsCopy: document.getElementById('diagnostics-copy'),
       diagnosticsNote: document.getElementById('diagnostics-note'),
-      diagnosticsStatus: document.getElementById('diagnostics-status')
+      diagnosticsStatus: document.getElementById('diagnostics-status'),
+      normalView: document.getElementById('normal-view'),
+      debugView: document.getElementById('debug-view'),
+      openDebug: document.getElementById('open-debug'),
+      closeDebug: document.getElementById('close-debug'),
+      debugTitle: document.getElementById('debug-title'),
+      debugNote: document.getElementById('debug-note'),
+      debugLabel: document.getElementById('debug-label'),
+      debugSource: document.getElementById('debug-source'),
+      debugGenerate: document.getElementById('debug-generate'),
+      debugOutput: document.getElementById('debug-output'),
+      debugOutputLabel: document.getElementById('debug-output-label'),
+      debugReport: document.getElementById('debug-report'),
+      debugCopy: document.getElementById('debug-copy'),
+      debugStatus: document.getElementById('debug-status')
     };
 
     const messages = {
@@ -126,7 +164,20 @@
         diagnosticsCopy: 'Copy diagnostics',
         diagnosticsNote: 'Only technical counts, processing stages and error categories. No names, PDF text or filename. You can inspect what you paste before sharing.',
         diagnosticsCopied: 'Diagnostics copied.',
-        diagnosticsCopyError: 'Could not copy diagnostics. Try another browser.'
+        diagnosticsCopyError: 'Could not copy diagnostics. Try another browser.',
+        debugLink: 'Debug',
+        debugBack: 'Back',
+        debugTitle: 'Text diagnostics',
+        debugNote: 'Paste private text to generate a structural report. All words and numbers are replaced by categories. Nothing is uploaded. Review before sharing: structural patterns may still be sensitive.',
+        debugLabel: 'Paste text to diagnose',
+        debugPlaceholder: 'Paste text here',
+        debugGenerate: 'Generate sanitized report',
+        debugOutputLabel: 'Sanitized report (review before copying)',
+        debugCopy: 'Copy sanitized report',
+        debugEmpty: 'Paste text first.',
+        debugReady: 'Report ready. Review before copying.',
+        debugCopied: 'Sanitized report copied.',
+        debugCopyError: 'Copy failed. Select and copy the report manually.'
       },
       fi: {
         file: 'PDF-tiedosto',
@@ -150,7 +201,20 @@
         diagnosticsCopy: 'Kopioi diagnostiikka',
         diagnosticsNote: 'Vain tekniset lukumäärät, käsittelyvaiheet ja virheluokat. Ei nimiä, PDF-tekstiä tai tiedostonimeä. Voit tarkistaa liitettävän raportin ennen jakamista.',
         diagnosticsCopied: 'Diagnostiikka kopioitu.',
-        diagnosticsCopyError: 'Diagnostiikan kopiointi epäonnistui. Kokeile toista selainta.'
+        diagnosticsCopyError: 'Diagnostiikan kopiointi epäonnistui. Kokeile toista selainta.',
+        debugLink: 'Vianmääritys',
+        debugBack: 'Takaisin',
+        debugTitle: 'Tekstin diagnostiikka',
+        debugNote: 'Liitä yksityinen teksti rakenteellisen raportin luomista varten. Kaikki sanat ja numerot korvataan luokilla. Mitään ei lähetetä palvelimelle. Tarkista raportti ennen jakamista: myös rakenne voi sisältää arkaluonteisia piirteitä.',
+        debugLabel: 'Liitä tutkittava teksti',
+        debugPlaceholder: 'Liitä teksti tähän',
+        debugGenerate: 'Luo anonymisoitu raportti',
+        debugOutputLabel: 'Anonymisoitu raportti (tarkista ennen kopiointia)',
+        debugCopy: 'Kopioi anonymisoitu raportti',
+        debugEmpty: 'Liitä ensin tekstiä.',
+        debugReady: 'Raportti on valmis. Tarkista se ennen kopiointia.',
+        debugCopied: 'Anonymisoitu raportti kopioitu.',
+        debugCopyError: 'Kopiointi epäonnistui. Valitse ja kopioi raportti käsin.'
       }
     };
 
@@ -288,6 +352,15 @@
       ui.sourceText.placeholder = translate('pastePlaceholder');
       ui.sourceText.setAttribute('aria-label', translate('pasteLabel'));
       ui.cleanButton.textContent = translate('cleanButton');
+      ui.openDebug.textContent = translate('debugLink');
+      ui.closeDebug.textContent = translate('debugBack');
+      ui.debugTitle.textContent = translate('debugTitle');
+      ui.debugNote.textContent = translate('debugNote');
+      ui.debugLabel.textContent = translate('debugLabel');
+      ui.debugSource.placeholder = translate('debugPlaceholder');
+      ui.debugGenerate.textContent = translate('debugGenerate');
+      ui.debugOutputLabel.textContent = translate('debugOutputLabel');
+      ui.debugCopy.textContent = translate('debugCopy');
       ui.diagnosticsCopy.textContent = translate('diagnosticsCopy');
       ui.diagnosticsNote.textContent = translate('diagnosticsNote');
       ui.diagnosticsStatus.textContent = diagnosticsFeedback ? translate(diagnosticsFeedback) : '';
@@ -591,6 +664,73 @@
       return names;
     }
 
+
+    // Strict structural encoding: never copy source words or numbers.
+    // All content tokens become fixed categories, including missed names.
+    function textShape(line) {
+      return Array.from(line.matchAll(/[\p{L}\p{M}]+|[\p{N}]+|[^\p{L}\p{M}\p{N}\s]+|\s+/gu), m => {
+        const value = m[0];
+        if (/^\s+$/u.test(value)) {
+          return value.replace(/\t/g, '\\t').replace(/ +/g, part => part.length >= 3 ? '   ' : part);
+        }
+        if (/^\p{N}+$/u.test(value)) return '<NUMBER>';
+        if (/[\p{L}\p{M}]/u.test(value)) {
+          const chars = Array.from(value).filter(c => /\p{L}/u.test(c));
+          const size = chars.length === 1 ? '1' : chars.length <= 4 ? '2-4' : chars.length <= 8 ? '5-8' : '9+';
+          const upper = chars.every(c => /\p{Lu}/u.test(c));
+          const lower = chars.every(c => /\p{Ll}/u.test(c));
+          const title = chars.length > 1 && /\p{Lu}/u.test(chars[0]) &&
+            chars.slice(1).every(c => /\p{Ll}/u.test(c));
+          return '<' + (upper ? 'UPPER' : lower ? 'lower' : title ? 'Title' : 'Mixed') + ':' + size + '>';
+        }
+        return Array.from(value, char => /[.,;:|/\\()\-+@=%#\[\]]/u.test(char) ? char : '·').join('');
+      }).join('');
+    }
+
+    function makeSanitizedDebugReport(source) {
+      const lines = source.normalize('NFC').replace(/\r\n?/g, '\n').split('\n');
+      const layout = { empty: 0, tabbed: 0, semicolon: 0, comma: 0, multiple_spaces: 0 };
+      const sample = [];
+      let nonempty = 0;
+      let pasteNames = null;
+      let pdfStyleNames = null;
+      try { pasteNames = cleanPastedNames(source).length; } catch (_) {}
+      try { pdfStyleNames = extractNames(lines).length; } catch (_) {}
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        if (!line.trim()) { layout.empty++; continue; }
+        nonempty++;
+        if (line.includes('\t')) layout.tabbed++;
+        if (line.includes(';')) layout.semicolon++;
+        if (line.includes(',')) layout.comma++;
+        if (/ {3,}/.test(line)) layout.multiple_spaces++;
+        if (sample.length >= 32) continue;
+        let pasteDetected = null;
+        let pdfDetected = null;
+        try { pasteDetected = cleanPastedNames(line).length; } catch (_) {}
+        try { pdfDetected = extractFromLine(line).length; } catch (_) {}
+        sample.push({
+          line: index + 1,
+          shape: textShape(line).slice(0, 320),
+          paste_detected: pasteDetected,
+          pdf_line_detected: pdfDetected
+        });
+      }
+      return JSON.stringify({
+        report_version: 1,
+        app: 'Nimilista',
+        kind: 'sanitized_text_structure',
+        note: 'Words and numbers replaced. Review the structural patterns before sharing.',
+        line_count: lines.length,
+        nonempty_line_count: nonempty,
+        layout_counts: layout,
+        paste_clean_names_detected: pasteNames,
+        pdf_style_names_detected: pdfStyleNames,
+        sample_lines: sample,
+        sample_truncated: nonempty > sample.length
+      }, null, 2);
+    }
+
     async function extractPdf(file, runId) {
       diagnostics.stage = 'library_load';
       const pdfjsLib = await getPdfLibrary();
@@ -766,6 +906,47 @@
       updateCount();
       ui.results.hidden = false;
       setStatus('cleanReady', names.length);
+    });
+    ui.openDebug.addEventListener('click', () => {
+      ui.normalView.hidden = true;
+      ui.debugView.hidden = false;
+      ui.debugSource.focus();
+    });
+    ui.closeDebug.addEventListener('click', () => {
+      ui.debugView.hidden = true;
+      ui.normalView.hidden = false;
+      ui.openDebug.focus();
+    });
+    ui.debugSource.addEventListener('input', () => {
+      ui.debugOutput.hidden = true;
+      ui.debugReport.value = '';
+      ui.debugStatus.textContent = '';
+    });
+    ui.debugGenerate.addEventListener('click', () => {
+      if (!ui.debugSource.value.trim()) {
+        ui.debugStatus.textContent = translate('debugEmpty');
+        ui.debugOutput.hidden = true;
+        return;
+      }
+      ui.debugReport.value = makeSanitizedDebugReport(ui.debugSource.value);
+      ui.debugOutput.hidden = false;
+      ui.debugStatus.textContent = translate('debugReady');
+    });
+    ui.debugCopy.addEventListener('click', async () => {
+      const report = ui.debugReport.value;
+      if (!report || ui.debugOutput.hidden) return;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(report);
+        } else {
+          ui.debugReport.focus();
+          ui.debugReport.select();
+          if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
+        }
+        ui.debugStatus.textContent = translate('debugCopied');
+      } catch (_) {
+        ui.debugStatus.textContent = translate('debugCopyError');
+      }
     });
     ui.diagnosticsCopy.addEventListener('click', copyDiagnostics);
     ui.language.addEventListener('change', localize);
