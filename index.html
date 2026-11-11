@@ -158,7 +158,10 @@
         pdf_page_count: null,
         pages: [],
         detected_names_count: null,
-        error_code: null
+        page_cleanup_failures: 0,
+        document_cleanup_failed: false,
+        error_code: null,
+        error_type: null
       };
     }
 
@@ -175,14 +178,17 @@
       if (stage === 'pdf_open') return 'PDF_OPEN_FAILED';
       if (stage === 'text_read') return 'TEXT_EXTRACTION_FAILED';
       if (stage === 'page_load') return 'PAGE_LOAD_FAILED';
+      if (stage === 'name_extraction') return 'NAME_EXTRACTION_FAILED';
+      if (stage === 'page_cleanup' || stage === 'document_cleanup') return 'CLEANUP_FAILED';
       return 'UNEXPECTED_FAILURE';
     }
 
     function safeReport() {
       if (!diagnostics) return '';
       const safeNumber = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
-      const allowedStages = new Set(['file_selected', 'library_load', 'pdf_open', 'page_load', 'text_read', 'ocr', 'name_extraction', 'done']);
-      const allowedErrors = new Set(['PASSWORD_PROTECTED', 'INVALID_PDF', 'MISSING_PDF', 'PDF_FETCH_ERROR', 'PDF_LIBRARY_LOAD_FAILED', 'OCR_FAILED', 'PDF_OPEN_FAILED', 'TEXT_EXTRACTION_FAILED', 'PAGE_LOAD_FAILED', 'UNEXPECTED_FAILURE', 'INVALID_FILE']);
+      const allowedStages = new Set(['file_selected', 'library_load', 'pdf_open', 'page_load', 'text_read', 'ocr', 'page_cleanup', 'document_cleanup', 'name_extraction', 'done']);
+      const allowedErrors = new Set(['PASSWORD_PROTECTED', 'INVALID_PDF', 'MISSING_PDF', 'PDF_FETCH_ERROR', 'PDF_LIBRARY_LOAD_FAILED', 'OCR_FAILED', 'PDF_OPEN_FAILED', 'TEXT_EXTRACTION_FAILED', 'PAGE_LOAD_FAILED', 'NAME_EXTRACTION_FAILED', 'CLEANUP_FAILED', 'UNEXPECTED_FAILURE', 'INVALID_FILE']);
+      const allowedTypes = new Set(['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'Error', 'PasswordException', 'InvalidPDFException', 'MissingPDFException', 'UnknownErrorException']);
       return JSON.stringify({
         report_version: 1,
         app: 'Nimilista',
@@ -200,7 +206,10 @@
           completed: page.completed === true
         })),
         detected_names_count: safeNumber(diagnostics.detected_names_count),
-        error_code: allowedErrors.has(diagnostics.error_code) ? diagnostics.error_code : null
+        page_cleanup_failures: safeNumber(diagnostics.page_cleanup_failures),
+        document_cleanup_failed: diagnostics.document_cleanup_failed === true,
+        error_code: allowedErrors.has(diagnostics.error_code) ? diagnostics.error_code : null,
+        error_type: allowedTypes.has(diagnostics.error_type) ? diagnostics.error_type : null
       }, null, 2);
     }
 
@@ -461,11 +470,21 @@
             lines.push(...pageLines);
             pageDiagnostic.completed = true;
           } finally {
-            page.cleanup();
+            // Cleanup is best-effort. A cleanup error must not discard the text
+            // already read from the PDF, or prevent name extraction.
+            try {
+              page.cleanup();
+            } catch (_) {
+              diagnostics.page_cleanup_failures++;
+            }
           }
         }
       } finally {
-        await pdf.destroy();
+        try {
+          await pdf.destroy();
+        } catch (_) {
+          diagnostics.document_cleanup_failed = true;
+        }
       }
       diagnostics.stage = 'name_extraction';
       return extractNames(lines);
@@ -559,6 +578,9 @@
       } catch (error) {
         diagnostics.status = 'failed';
         diagnostics.error_code = classifyFailure(error, diagnostics.stage);
+        // Fixed whitelist of JavaScript error types, without names or exception messages.
+        const safeTypes = new Set(['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'Error', 'PasswordException', 'InvalidPDFException', 'MissingPDFException', 'UnknownErrorException']);
+        diagnostics.error_type = error && safeTypes.has(error.name) ? error.name : null;
         // Do not log raw errors: third-party exceptions may include document data.
         setStatus('error');
       } finally {
