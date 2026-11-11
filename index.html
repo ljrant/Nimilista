@@ -195,8 +195,8 @@
       return promise;
     }
 
-    // PDF.js gives text as positioned fragments, not necessarily as complete lines.
-    function pdfLines(items) {
+    // Keep PDF text coordinates: table columns are more reliable than capitalization alone.
+    function pdfRows(items) {
       const positioned = items
         .filter(item => typeof item.str === 'string' && item.str.trim())
         .map(item => ({
@@ -216,21 +216,123 @@
           last.items.push(item);
         }
       }
+      for (const row of rows) row.items.sort((a, b) => a.x - b.x);
+      return rows;
+    }
 
-      return rows.map(row => {
-        row.items.sort((a, b) => a.x - b.x);
-        let line = '';
-        let previous = null;
-        for (const item of row.items) {
-          if (previous) {
-            const gap = item.x - previous.x - previous.width;
-            line += gap > 22 ? '\t' : ' ';
-          }
-          line += item.text;
-          previous = item;
+    function rowText(row) {
+      let line = '';
+      let previous = null;
+      for (const item of row.items) {
+        if (previous) {
+          const gap = item.x - previous.x - previous.width;
+          line += gap > 22 ? '\t' : ' ';
         }
-        return line.trim();
-      }).filter(Boolean);
+        line += item.text;
+        previous = item;
+      }
+      return line.trim();
+    }
+
+    // Find column headings in either Finnish or English.
+    function headerKind(raw) {
+      const name = raw.normalize('NFKC').toLocaleLowerCase('fi')
+        .replace(/[.:*]/g, '').replace(/\s+/g, ' ').trim();
+      if (['nimi', 'koko nimi', 'full name', 'name', 'osallistujan nimi',
+        'henkilön nimi', 'employee name', 'person name'].includes(name)) return 'full';
+      if (['etunimi', 'etunimet', 'first name', 'given name',
+        'given names', 'forename'].includes(name)) return 'first';
+      if (['sukunimi', 'last name', 'surname', 'family name'].includes(name)) return 'last';
+      return null;
+    }
+
+    function rowCells(row) {
+      const cells = [];
+      let previous = null;
+      for (const item of row.items) {
+        const gap = previous ? item.x - previous.x - previous.width : Infinity;
+        if (!previous || gap > 12) cells.push({ x: item.x, text: item.text });
+        else cells[cells.length - 1].text += ' ' + item.text;
+        previous = item;
+      }
+      return cells;
+    }
+
+    function detectTableHeader(row) {
+      const cells = rowCells(row);
+      // Require at least two visible columns; single-word headings occur in prose too.
+      if (cells.length < 2) return null;
+      const columns = cells.map(c => ({ ...c, kind: headerKind(c.text) }));
+      const kinds = columns.map(c => c.kind);
+      if (!kinds.includes('full') && !(kinds.includes('first') && kinds.includes('last'))) {
+        return null;
+      }
+      return columns;
+    }
+
+    function namePart(value) {
+      const text = value.trim().normalize('NFC');
+      const pieces = text.split(/\s+/).filter(Boolean);
+      if (pieces.length < 1 || pieces.length > 3 ||
+          /[0-9@:/\\()[\]!?=+,]/.test(text)) return null;
+      return pieces.every((word, i) => nameWord(word, i)) ? text : null;
+    }
+
+    function tableName(value) {
+      const strict = candidate(value);
+      if (strict) return strict;
+      // The column header supplies context, so lowercase names can also be accepted.
+      let cleaned = value.trim().normalize('NFC')
+        .replace(/^\d{1,5}[.)-]?\s+/, '').replace(/\s+/g, ' ');
+      if (cleaned.length > 90 || /[0-9@:/\\()[\]!?=+]/.test(cleaned)) return null;
+      const comma = cleaned.match(/^([^,]+),\s*([^,]+)$/);
+      if (comma) cleaned = comma[2] + ' ' + comma[1];
+      const parts = cleaned.split(' ');
+      if (parts.length < 2 || parts.length > 5) return null;
+      if (!parts.every(part => /^[\p{L}\p{M}'’.-]+$/u.test(part) &&
+          !excluded.has(part.toLocaleLowerCase('fi')))) return null;
+      return cleaned;
+    }
+
+    function tableNames(rows, inheritedLayout) {
+      const names = [];
+      let layout = inheritedLayout || null;
+      let detectedHeader = false;
+      for (const row of rows) {
+        const newHeader = detectTableHeader(row);
+        if (newHeader) {
+          layout = newHeader;
+          detectedHeader = true;
+          continue;
+        }
+        if (!layout) continue;
+
+        // The start of each header is the start of its data column.
+        // Ignore other columns such as dates, addresses and row numbers.
+        const values = layout.map(() => []);
+        for (const item of row.items) {
+          let col = 0;
+          for (let i = 1; i < layout.length; i++) {
+            if (item.x >= layout[i].x - 4) col = i;
+            else break;
+          }
+          values[col].push(item.text);
+        }
+        const value = kind => {
+          const index = layout.findIndex(col => col.kind === kind);
+          return index < 0 ? '' : values[index].join(' ').trim();
+        };
+        let found = null;
+        if (layout.some(col => col.kind === 'full')) {
+          found = tableName(value('full'));
+        } else {
+          const first = namePart(value('first'));
+          const last = namePart(value('last'));
+          if (first && last) found = first + ' ' + last;
+        }
+        if (found) names.push(found);
+      }
+      return { names, layout, detectedHeader };
     }
 
     async function getOcrWorker() {
@@ -350,7 +452,8 @@
         data: new Uint8Array(await file.arrayBuffer()),
         isEvalSupported: false
       }).promise;
-      const lines = [];
+      const names = [];
+      let previousLayout = null;
       try {
         for (let number = 1; number <= pdf.numPages; number++) {
           if (runId !== activeRun) return [];
@@ -358,26 +461,39 @@
           const page = await pdf.getPage(number);
           try {
             let pageLines = [];
+            let pageNames = [];
+            let table = null;
             try {
               const text = await page.getTextContent();
-              pageLines = pdfLines(text.items);
+              const rows = pdfRows(text.items);
+              pageLines = rows.map(rowText).filter(Boolean);
+              table = tableNames(rows, previousLayout);
+              previousLayout = table.layout;
+              // When headings are known, select only name columns.
+              if (table.layout) pageNames = table.names;
+              else pageNames = extractNames(pageLines);
             } catch (error) {
-              // Some PDFs can render but have a damaged or inaccessible text layer.
+              // Some PDFs render but have a damaged or inaccessible text layer.
+              pageNames = extractNames(pageLines);
             }
 
-            // A scanned document may contain a small header in its text layer.
-            // Try OCR whenever selectable text does not yield recognizable names.
-            if (extractNames(pageLines).length === 0) {
+            // Try OCR when the text layer produces no names. If there is readable
+            // text already, an OCR library failure should not discard it.
+            if (pageNames.length === 0) {
               setStatus('ocr', number, pdf.numPages);
               try {
                 const recognized = await readScannedPage(page);
-                if (recognized.length) pageLines = recognized;
+                if (recognized.length) {
+                  const ocrNames = extractNames(recognized);
+                  if (ocrNames.length) pageNames = ocrNames;
+                }
               } catch (error) {
-                if (error.code === 'OCR_LIBRARY') throw error;
-                throw Object.assign(new Error('OCR could not read page'), { code: 'OCR_LIBRARY' });
+                if (pageLines.join('').trim().length < 20) {
+                  throw Object.assign(new Error('OCR could not read page'), { code: 'OCR_LIBRARY' });
+                }
               }
             }
-            lines.push(...pageLines);
+            names.push(...pageNames);
           } finally {
             page.cleanup();
           }
@@ -385,7 +501,13 @@
       } finally {
         await pdf.destroy();
       }
-      return extractNames(lines);
+      // Case-insensitive deduplication while retaining the first spelling.
+      const unique = new Map();
+      for (const name of names) {
+        const key = name.normalize('NFC').toLocaleLowerCase('fi');
+        if (!unique.has(key)) unique.set(key, name);
+      }
+      return [...unique.values()];
     }
 
     function classifyError(error) {
